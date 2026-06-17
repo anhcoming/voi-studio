@@ -35,6 +35,8 @@
       print: row.print||row.name, price: +row.price||0, compare: +row.compare||0,
       colors: row.colors||[], sizes: row.sizes||["S","M","L","XL"],
       stock: row.stock==null?0:+row.stock,
+      sold: row.sold==null?0:+row.sold,
+      likes: row.likes==null?0:+row.likes,
       images, image_url: images[0] || null,
       active: row.active!==false, sort: +row.sort||0,
       sale: (+row.compare||0) > (+row.price||0),
@@ -47,6 +49,8 @@
       collection:p.collection||"", price:+p.price||0, compare:+p.compare||0,
       colors:p.colors||[], sizes:p.sizes||["S","M","L","XL"],
       stock:p.stock==null?0:+p.stock,
+      sold:p.sold==null?0:+p.sold,
+      likes:p.likes==null?0:+p.likes,
       images, image_url: images[0] || null,
       active:p.active!==false, sort:+p.sort||0,
     };
@@ -63,6 +67,8 @@
     return { ...row, type:row.type||cat.type, catName:row.catName||cat.name,
       colors:row.colors||[], sizes:row.sizes||["S","M","L","XL"],
       stock: row.stock==null?0:+row.stock,
+      sold: row.sold==null?0:+row.sold,
+      likes: row.likes==null?0:+row.likes,
       images, image_url: images[0] || row.image_url || null,
       active: row.active!==false, sort:+row.sort||0, sale:(+row.compare||0)>(+row.price||0) };
   }
@@ -110,10 +116,14 @@
       if(this.cloud){
         const row = toRow(p);
         let {data,error} = await supa.from("products").upsert(row).select().single();
-        // Fallback nếu DB chưa có column `images` (migration chưa chạy)
-        if(error && /column.*images/i.test(error.message||"")){
-          const {images, ...rowNoImg} = row;
-          ({data,error} = await supa.from("products").upsert(rowNoImg).select().single());
+        // Fallback nếu DB chưa có 1 số column mới (migration chưa chạy)
+        // Loại bỏ tuần tự từng column missing đến khi insert thành công.
+        let attempt = { ...row };
+        for(const col of ["images","sold","likes"]){
+          if(error && new RegExp(`column.*${col}`,"i").test(error.message||"")){
+            delete attempt[col];
+            ({data,error} = await supa.from("products").upsert(attempt).select().single());
+          }
         }
         if(error) throw error; return mapProduct(data);
       }

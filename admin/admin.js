@@ -169,13 +169,15 @@ async function renderProducts(){
     </div>
   </div>
   ${_products.length? `<div class="tablewrap"><table class="tbl">
-    <thead><tr><th>Ảnh</th><th>Tên</th><th>Danh mục</th><th>Giá</th><th>Tồn</th><th>Hiện</th><th></th></tr></thead>
+    <thead><tr><th>Ảnh</th><th>Tên</th><th>Danh mục</th><th>Giá</th><th>Tồn</th><th>Đã bán</th><th>♥</th><th>Hiện</th><th></th></tr></thead>
     <tbody>${_products.map(p=>`<tr>
       <td><div class="pthumb">${thumb(p)}</div></td>
       <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px">${esc(p.collection||"")}</div></td>
       <td>${esc(p.catName||p.catKey)}</td>
       <td><b>${money(p.price)}</b>${p.compare>p.price?`<div class="muted" style="font-size:11.5px;text-decoration:line-through">${money(p.compare)}</div>`:""}</td>
       <td style="${p.stock<=0?'color:var(--sale);font-weight:700':''}">${p.stock}</td>
+      <td style="font-variant-numeric:tabular-nums">${p.sold||0}</td>
+      <td style="font-variant-numeric:tabular-nums">${p.likes||0}</td>
       <td><span class="pill ${p.active!==false?'tag-on':'tag-off'}">${p.active!==false?"Hiện":"Ẩn"}</span></td>
       <td style="white-space:nowrap">
         <button class="mini pedit" data-id="${esc(p.id)}">Sửa</button>
@@ -196,7 +198,7 @@ async function renderProducts(){
 
 function productModal(p){
   const editing=!!p;
-  p = p || {name:"",print:"",catKey:"ao-thun",collection:"",price:0,compare:0,stock:50,colors:["#1c1c1c","#f0ede6"],sizes:["S","M","L","XL"],images:[],image_url:null,active:true};
+  p = p || {name:"",print:"",catKey:"ao-thun",collection:"",price:0,compare:0,stock:50,sold:0,likes:0,colors:["#1c1c1c","#f0ede6"],sizes:["S","M","L","XL"],images:[],image_url:null,active:true};
   // images = array URL. Back-compat: nếu chỉ có image_url cũ → đưa vào array.
   let images = (Array.isArray(p.images) && p.images.length ? p.images.slice()
                 : (p.image_url ? [p.image_url] : []));
@@ -222,6 +224,10 @@ function productModal(p){
       <div class="frow">
         <label class="fld"><span>Giá bán (₫) *</span><input name="price" type="number" min="0" value="${p.price||0}" required></label>
         <label class="fld"><span>Giá gốc (₫)</span><input name="compare" type="number" min="0" value="${p.compare||0}"></label>
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Đã bán (số ảo)</span><input name="sold" type="number" min="0" value="${p.sold||0}" placeholder="VD: 250"></label>
+        <label class="fld"><span>Yêu thích (số ảo)</span><input name="likes" type="number" min="0" value="${p.likes||0}" placeholder="VD: 42"></label>
       </div>
       <div class="fld"><span>Màu sắc</span><div class="colorchips" id="chips"></div>
         <button type="button" class="mini" id="addColor" style="margin-top:8px">+ Thêm màu</button></div>
@@ -295,6 +301,7 @@ function productModal(p){
       name:f.name.value.trim(), print:f.print.value.trim(),
       catKey:f.catKey.value, collection:f.collection.value.trim(),
       price:+f.price.value||0, compare:+f.compare.value||0, stock:+f.stock.value||0,
+      sold:+f.sold.value||0, likes:+f.likes.value||0,
       colors, sizes:sizes.length?sizes:["Freesize"],
       images, image_url:images[0]||null, active:f.active.checked,
     };

@@ -170,6 +170,11 @@ function productImage(p, opts){
   if(p.image_url) return `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy">`;
   return S.productSVG(p, opts||{seed:hashSeed(p.id)});
 }
+function formatCount(n){
+  n = +n||0;
+  if(n>=1000) return (n/1000).toFixed(n%1000===0?0:1).replace(/\.0$/,"") + "k";
+  return ""+n;
+}
 function productCard(p){
   if(!p || !p.id){ console.warn("productCard: SP thiếu id, bỏ qua:", p); return ""; }
   const off = S.discountPct(p.price, p.compare);
@@ -179,6 +184,13 @@ function productCard(p){
   const media = p.image_url
     ? `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy">`
     : S.productSVG(p,{seed:hashSeed(p.id)}) + `<div class="hoverimg">${S.productSVG(p,{color:p.colors[1]||p.colors[0],seed:hashSeed(p.id)+1})}</div>`;
+  const sold=+p.sold||0, likes=+p.likes||0;
+  const stats = (sold>0 || likes>0)
+    ? `<div class="card-stats">
+        ${sold>0?`<span class="stat-sold">Đã bán ${formatCount(sold)}</span>`:""}
+        ${likes>0?`<span class="stat-like">♥ ${formatCount(likes)}</span>`:""}
+      </div>`
+    : "";
   return `<article class="card">
     <div class="thumb">
       <a class="thumb-link" href="${url}" aria-label="${escapeXML(p.name)}">
@@ -194,6 +206,7 @@ function productCard(p){
         <span class="now">${money(p.price)}</span>
         ${p.compare>p.price?`<span class="was">${money(p.compare)}</span><span class="off">-${off}%</span>`:``}
       </div>
+      ${stats}
       <div class="swatches">${swatches}</div>
     </div>
   </article>`;
@@ -553,6 +566,10 @@ async function renderProduct(){
         <span class="now">${money(p.price)}</span>
         ${p.compare>p.price?`<span class="was">${money(p.compare)}</span><span class="off">-${off}%</span>`:``}
       </div>
+      ${((+p.sold||0)>0 || (+p.likes||0)>0)?`<div class="pdp-stats">
+        ${(+p.sold||0)>0?`<span class="stat-sold">Đã bán ${formatCount(p.sold)}</span>`:""}
+        ${(+p.likes||0)>0?`<span class="stat-like">♥ ${formatCount(p.likes)} yêu thích</span>`:""}
+      </div>`:""}
       ${soldOut?`<div style="color:var(--sale);font-weight:700;margin:0 0 10px">● Hết hàng</div>`
         :(p.stock!=null&&p.stock<=5?`<div class="muted" style="margin:0 0 10px">Chỉ còn ${p.stock} sản phẩm</div>`:``)}
       <p style="color:var(--ink-soft);font-size:14.5px">Form relaxed fit, chất cotton 100% co giãn nhẹ, in/thêu bền màu. Phong cách ${p.collection}.</p>
