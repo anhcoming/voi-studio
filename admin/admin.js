@@ -269,7 +269,7 @@ function productModal(p){
   drawChips(); drawGallery();
   $("#addColor").onclick=()=>{ colors.push("#888888"); drawChips(); };
   $("[name=catKey]").onchange=drawGallery; $("[name=print]").oninput=drawGallery; $("[name=name]").oninput=()=>{ if(!images.length) drawGallery(); };
-  $("#drop").onclick=()=>$("#imgfile").click();
+  // <label for="imgfile"> đã tự trigger input — KHÔNG gắn onclick thủ công kẻo double-trigger
   $("#imgfile").onchange=async(e)=>{
     const files = Array.from(e.target.files||[]); if(!files.length) return;
     const drop=$("#drop"); const original=drop.textContent;
