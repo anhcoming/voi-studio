@@ -573,6 +573,69 @@ function renderCollection(){
   apply();
 }
 
+/* ---------------- HƯỚNG DẪN CHỌN SIZE ---------------- */
+const SIZE_CHART = [
+  {size:"S",   hMin:150,hMax:160, wMin:40,wMax:53, chest:"88–92",   length:68},
+  {size:"M",   hMin:158,hMax:168, wMin:50,wMax:63, chest:"92–98",   length:70},
+  {size:"L",   hMin:165,hMax:174, wMin:60,wMax:72, chest:"98–104",  length:72},
+  {size:"XL",  hMin:170,hMax:180, wMin:70,wMax:83, chest:"104–110", length:74},
+  {size:"2XL", hMin:176,hMax:188, wMin:80,wMax:95, chest:"110–118", length:76},
+];
+function suggestSize(h,w){
+  let best=SIZE_CHART[0], bestScore=Infinity;
+  SIZE_CHART.forEach(s=>{
+    const dh = h<s.hMin ? s.hMin-h : h>s.hMax ? h-s.hMax : 0;
+    const dw = w<s.wMin ? s.wMin-w : w>s.wMax ? w-s.wMax : 0;
+    const score = dw*1.6 + dh*0.8;   // cân nặng quan trọng hơn cho áo
+    if(score<bestScore){ bestScore=score; best=s; }
+  });
+  return best;
+}
+function openSizeGuide(catKey){
+  if($("#sizeGuideModal")) return;
+  const isTote = catKey==="tote";
+  const rows = SIZE_CHART.map(s=>`<tr data-size="${s.size}">
+    <td><b>${s.size}</b></td><td>${s.hMin}–${s.hMax}</td><td>${s.wMin}–${s.wMax}</td><td>${s.chest}</td><td>${s.length}</td></tr>`).join("");
+  const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="sizeGuideModal";
+  ov.innerHTML=`<div class="modal sg-modal">
+    <button class="modal-close" id="sgClose" aria-label="Đóng">×</button>
+    <h3 class="modal-title">Hướng dẫn chọn size</h3>
+    ${isTote?`<p class="muted" style="font-size:13.5px">Sản phẩm phụ kiện này là <b>Freesize</b> — phù hợp mọi nhu cầu.</p>`:`
+    <p class="muted" style="font-size:13px;margin-bottom:14px">Bảng size tiêu chuẩn (form relaxed). Số đo mang tính tham khảo, có thể lệch 1–2cm tuỳ dáng người.</p>
+    <div class="sg-tablewrap"><table class="sg-table">
+      <thead><tr><th>Size</th><th>Cao (cm)</th><th>Nặng (kg)</th><th>Ngực (cm)</th><th>Dài áo (cm)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="sg-tool">
+      <div class="sg-tool-title">✨ Gợi ý size theo số đo của bạn</div>
+      <div class="sg-fields">
+        <label class="fld"><span>Chiều cao (cm)</span><input id="sgH" type="number" inputmode="numeric" min="120" max="210" placeholder="VD: 170"></label>
+        <label class="fld"><span>Cân nặng (kg)</span><input id="sgW" type="number" inputmode="numeric" min="30" max="150" placeholder="VD: 62"></label>
+        <button class="btn btn-dark" id="sgGo" type="button">Gợi ý</button>
+      </div>
+      <div class="sg-result" id="sgResult" hidden></div>
+    </div>`}
+  </div>`;
+  document.body.appendChild(ov);
+  requestAnimationFrame(()=>ov.classList.add("show"));
+  const close=()=>{ ov.classList.remove("show"); setTimeout(()=>ov.remove(),200); };
+  $("#sgClose").onclick=close; ov.addEventListener("click",e=>{ if(e.target===ov) close(); });
+  const go=$("#sgGo");
+  if(go) go.onclick=()=>{
+    const h=+$("#sgH").value, w=+$("#sgW").value;
+    if(!h||!w){ toast("Nhập chiều cao và cân nặng"); return; }
+    const s=suggestSize(h,w);
+    $$(".sg-table tbody tr").forEach(tr=>tr.classList.toggle("hl", tr.dataset.size===s.size));
+    const onPDP = !!document.querySelector(`#sizes .size-btn[data-s="${s.size}"]`);
+    const res=$("#sgResult"); res.hidden=false;
+    res.innerHTML=`Với <b>${h}cm</b> · <b>${w}kg</b>, size phù hợp nhất là <span class="sg-badge">${s.size}</span>.
+      <div class="muted" style="font-size:12.5px;margin-top:6px">Thích mặc rộng hơn → chọn lên 1 size; thích ôm → giảm 1 size.</div>
+      ${onPDP?`<button class="btn btn-dark btn-block" id="sgPick" type="button" style="margin-top:12px">Chọn size ${s.size}</button>`:""}`;
+    const pick=$("#sgPick");
+    if(pick) pick.onclick=()=>{ const b=document.querySelector(`#sizes .size-btn[data-s="${s.size}"]`); if(b){ b.click(); toast("Đã chọn size "+s.size); } close(); };
+  };
+}
+
 /* ---------------- TRANG CHI TIẾT ---------------- */
 async function renderProduct(){
   const root=$("#page");
@@ -596,18 +659,20 @@ async function renderProduct(){
   const off = S.discountPct(p.price,p.compare);
   const soldOut = (p.stock!=null && p.stock<=0);
 
-  const gallery = [];
-  const imgs = Array.isArray(p.images) ? p.images.filter(Boolean) : [];
-  if(imgs.length){
-    // Có ảnh thật → dùng toàn bộ ảnh do admin upload (theo đúng thứ tự)
-    imgs.forEach(url => gallery.push(`<img class="thumb-img" src="${url}" alt="${escapeXML(p.name)}">`));
-  } else {
-    // Fallback: 1 ảnh image_url cũ (nếu có) + SVG variants
-    if(p.image_url) gallery.push(`<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}">`);
-    gallery.push(S.productSVG(p,{color:p.colors[0]}));
-    gallery.push(S.productSVG(p,{back:true,color:p.colors[0]}));
-    if(p.colors[1]) gallery.push(S.productSVG(p,{color:p.colors[1],seed:2}));
+  // Gallery theo MÀU: ảnh của màu đang chọn → ảnh chung → SVG fallback
+  function galleryFor(c){
+    const ci = p.color_images || {};
+    let urls = (ci[c]||[]).filter(Boolean);
+    if(!urls.length){
+      // gộp tất cả ảnh theo màu (nếu có) để vẫn xem được, nếu màu này chưa gán ảnh
+      const all = Object.values(ci).flat().filter(Boolean);
+      urls = all.length ? all : (Array.isArray(p.images)?p.images.filter(Boolean):[]);
+    }
+    if(urls.length) return urls.map(u=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}">`);
+    return [S.productSVG(p,{color:c}), S.productSVG(p,{back:true,color:c})];
   }
+  let gallery = galleryFor(color);
+  let slideIdx = 0, slideTimer = null;
 
   root.innerHTML = `
   <div class="wrap page-head">
@@ -615,10 +680,12 @@ async function renderProduct(){
   </div>
   <div class="wrap pdp">
     <div class="gallery">
-      <div class="main" id="main">${gallery[0]}</div>
-      <div class="thumbs" id="thumbs">
-        ${gallery.map((g,i)=>`<button class="${i===0?'active':''}" data-i="${i}">${g}</button>`).join("")}
+      <div class="main" id="main">
+        <div class="pdp-stage" id="mainStage">${gallery[0]||""}</div>
+        <button class="pdp-nav prev" id="gPrev" type="button" aria-label="Ảnh trước">‹</button>
+        <button class="pdp-nav next" id="gNext" type="button" aria-label="Ảnh sau">›</button>
       </div>
+      <div class="thumbs" id="thumbs"></div>
     </div>
     <div class="pdp-info">
       <div class="sub">${p.collection}</div>
@@ -640,7 +707,7 @@ async function renderProduct(){
         ${p.colors.map((c,i)=>`<button class="color-dot ${i===0?'active':''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join("")}
       </div>
 
-      <div class="opt-label">Kích cỡ <a href="#" class="muted" onclick="toast('Bảng size: S–2XL');return false" style="text-decoration:underline">Hướng dẫn chọn size</a></div>
+      <div class="opt-label">Kích cỡ <a href="#" class="muted" onclick="openSizeGuide('${p.catKey}');return false" style="text-decoration:underline">📐 Hướng dẫn chọn size</a></div>
       <div class="opt-row" id="sizes">
         ${p.sizes.map(s=>`<button class="size-btn" data-s="${s}">${s}</button>`).join("")}
       </div>
@@ -677,18 +744,35 @@ async function renderProduct(){
     <div class="grid">${S.byCollection(p.collection).filter(x=>x.id!==p.id).concat(S.byCategory(p.catKey).filter(x=>x.id!==p.id)).slice(0,4).map(productCard).join("")}</div>
   </div></section>`;
 
-  const setColorName=()=> $("#colorName").textContent="";
-  // gallery thumbs
-  $$("#thumbs button").forEach(b=> b.onclick=()=>{
-    $$("#thumbs button").forEach(x=>x.classList.remove("active"));
-    b.classList.add("active");
-    $("#main").innerHTML = gallery[+b.dataset.i];
-  });
-  // colors
+  // ----- Gallery slideshow theo màu (tự chuyển ảnh) -----
+  function showSlide(i){
+    if(!gallery.length) return;
+    slideIdx = (i+gallery.length)%gallery.length;
+    $("#mainStage").innerHTML = gallery[slideIdx];
+    $$("#thumbs button").forEach((b,bi)=>b.classList.toggle("active",bi===slideIdx));
+  }
+  function restartAuto(){
+    if(slideTimer) clearInterval(slideTimer);
+    if(gallery.length>1) slideTimer = setInterval(()=>showSlide(slideIdx+1), 3500);
+  }
+  function renderThumbs(){
+    $("#thumbs").innerHTML = gallery.map((g,i)=>`<button class="${i===slideIdx?'active':''}" data-i="${i}">${g}</button>`).join("");
+    $$("#thumbs button").forEach(b=> b.onclick=()=>{ showSlide(+b.dataset.i); restartAuto(); });
+    const showNav = gallery.length>1;
+    $("#gPrev").style.display = $("#gNext").style.display = showNav?"flex":"none";
+  }
+  function setColor(c){
+    color=c; gallery=galleryFor(c); slideIdx=0;
+    $("#mainStage").innerHTML = gallery[0]||"";
+    renderThumbs(); restartAuto();
+  }
+  renderThumbs(); restartAuto();
+  $("#gPrev").onclick=()=>{ showSlide(slideIdx-1); restartAuto(); };
+  $("#gNext").onclick=()=>{ showSlide(slideIdx+1); restartAuto(); };
+  // colors → đổi gallery sang ảnh của màu đó
   $$("#colors .color-dot").forEach(b=> b.onclick=()=>{
     $$("#colors .color-dot").forEach(x=>x.classList.remove("active"));
-    b.classList.add("active"); color=b.dataset.c;
-    $("#main").innerHTML = S.productSVG(p,{color});
+    b.classList.add("active"); setColor(b.dataset.c);
   });
   // sizes
   $$("#sizes .size-btn").forEach(b=> b.onclick=()=>{
@@ -993,6 +1077,13 @@ async function renderOrder(){
   if(param("new")==="1") toast("Đặt hàng thành công! Mã đơn: "+o.code);
 }
 
+/* ---------------- CATEGORIES ---------------- */
+const Categories = { loaded:false, async load(){
+  try{ const rows=await DB.listCategories(); if(rows&&rows.length) S.CATEGORIES.splice(0,S.CATEGORIES.length,...rows); }
+  catch(e){ console.warn("Categories.load",e); }
+  this.loaded=true;
+}};
+
 /* ---------------- CATALOG ---------------- */
 const Catalog = { loaded:false, async load(){
   try{ const rows=await DB.listProducts(); if(rows&&rows.length) S.PRODUCTS.splice(0,S.PRODUCTS.length,...rows); }
@@ -1017,7 +1108,9 @@ function hideAppLoader(){
 /* ---------------- BOOT ---------------- */
 document.addEventListener("DOMContentLoaded", async ()=>{
   showAppLoader();
-  await Promise.all([Catalog.load(), Auth.init()]);
+  // Danh mục phải nạp trước (vì map sản phẩm cần tên/type danh mục)
+  await Promise.all([Categories.load(), Auth.init()]);
+  await Catalog.load();
   renderHeader();
   renderFooter();
   const page = document.body.dataset.page;

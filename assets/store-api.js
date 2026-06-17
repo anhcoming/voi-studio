@@ -10,7 +10,7 @@
   const supa = hasKeys ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
   const MODE = supa ? "cloud" : "local";
 
-  const LS = { products:"originals_products_v1", orders:"originals_orders_v1", admin:"originals_admin_v1" };
+  const LS = { products:"originals_products_v1", orders:"originals_orders_v1", admin:"originals_admin_v1", categories:"originals_categories_v1" };
   const read  = (k,d)=>{ try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
   const write = (k,v)=> localStorage.setItem(k, JSON.stringify(v));
 
@@ -25,33 +25,57 @@
     return arr;
   }
 
+  /* ---- chuẩn hoá color_images: { "#hex": [url,...] } ---- */
+  function normColorImages(raw){
+    if(typeof raw === "string"){ try{ raw = JSON.parse(raw); }catch(e){ raw = {}; } }
+    if(!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out = {};
+    for(const k of Object.keys(raw)){
+      let arr = raw[k];
+      if(!Array.isArray(arr)) arr = [];
+      arr = arr.map(x => typeof x === "string" ? x : (x?.url || "")).filter(Boolean);
+      if(arr.length) out[k] = arr;
+    }
+    return out;
+  }
+  /* ảnh chính của SP: ưu tiên ảnh của màu đầu tiên → gallery phẳng → null */
+  function pickMainImage(colors, colorImages, flatImages){
+    const first = (colors||[])[0];
+    if(first && colorImages[first] && colorImages[first].length) return colorImages[first][0];
+    return flatImages[0] || null;
+  }
+
   /* ---- map giữa DB row và product dùng ở giao diện ---- */
   function mapProduct(row){
     const cat = (window.STORE.CATEGORIES||[]).find(c=>c.key===row.cat_key) || {name:row.cat_key||"", type:"tee"};
     const images = normImages(row);
+    const color_images = normColorImages(row.color_images);
+    const colors = row.colors||[];
     return {
       id: row.id, catKey: row.cat_key, type: cat.type, catName: cat.name,
       collection: row.collection||"", name: row.name, shortName: row.print||row.name,
       print: row.print||row.name, price: +row.price||0, compare: +row.compare||0,
-      colors: row.colors||[], sizes: row.sizes||["S","M","L","XL"],
+      colors, sizes: row.sizes||["S","M","L","XL"],
       stock: row.stock==null?0:+row.stock,
       sold: row.sold==null?0:+row.sold,
       likes: row.likes==null?0:+row.likes,
-      images, image_url: images[0] || null,
+      images, color_images, image_url: pickMainImage(colors, color_images, images),
       active: row.active!==false, sort: +row.sort||0,
       sale: (+row.compare||0) > (+row.price||0),
     };
   }
   function toRow(p){
     const images = Array.isArray(p.images) ? p.images.filter(Boolean) : normImages(p);
+    const color_images = normColorImages(p.color_images);
+    const colors = p.colors||[];
     const r = {
       name:p.name, print:p.print||p.shortName||p.name, cat_key:p.catKey,
       collection:p.collection||"", price:+p.price||0, compare:+p.compare||0,
-      colors:p.colors||[], sizes:p.sizes||["S","M","L","XL"],
+      colors, sizes:p.sizes||["S","M","L","XL"],
       stock:p.stock==null?0:+p.stock,
       sold:p.sold==null?0:+p.sold,
       likes:p.likes==null?0:+p.likes,
-      images, image_url: images[0] || null,
+      images, color_images, image_url: pickMainImage(colors, color_images, images),
       active:p.active!==false, sort:+p.sort||0,
     };
     if(p.id && isUUID(p.id)) r.id = p.id;
@@ -64,12 +88,14 @@
     if(row && row.cat_key !== undefined) return mapProduct(row);
     const cat = (window.STORE.CATEGORIES||[]).find(c=>c.key===row.catKey) || {name:row.catName||"", type:row.type||"tee"};
     const images = normImages(row);
+    const color_images = normColorImages(row.color_images);
+    const colors = row.colors||[];
     return { ...row, type:row.type||cat.type, catName:row.catName||cat.name,
-      colors:row.colors||[], sizes:row.sizes||["S","M","L","XL"],
+      colors, sizes:row.sizes||["S","M","L","XL"],
       stock: row.stock==null?0:+row.stock,
       sold: row.sold==null?0:+row.sold,
       likes: row.likes==null?0:+row.likes,
-      images, image_url: images[0] || row.image_url || null,
+      images, color_images, image_url: pickMainImage(colors, color_images, images) || row.image_url || null,
       active: row.active!==false, sort:+row.sort||0, sale:(+row.compare||0)>(+row.price||0) };
   }
 
@@ -119,7 +145,7 @@
         // Fallback nếu DB chưa có 1 số column mới (migration chưa chạy)
         // Loại bỏ tuần tự từng column missing đến khi insert thành công.
         let attempt = { ...row };
-        for(const col of ["images","sold","likes"]){
+        for(const col of ["color_images","images","sold","likes"]){
           if(error && new RegExp(`column.*${col}`,"i").test(error.message||"")){
             delete attempt[col];
             ({data,error} = await supa.from("products").upsert(attempt).select().single());
@@ -145,6 +171,43 @@
         return rows.length;
       }
       seedLocal(); return demo.length;
+    },
+
+    /* ============ DANH MỤC ============ */
+    async listCategories(){
+      if(this.cloud){
+        const {data,error}=await supa.from("categories").select("*").order("sort",{ascending:true});
+        if(error){ console.warn("listCategories",error.message); return []; }
+        return (data||[]).filter(c=>c.active!==false);
+      }
+      let arr = read(LS.categories, null);
+      if(!arr){ arr = (window.STORE.CATEGORIES||[]).map((c,i)=>({...c,sort:i,active:true})); write(LS.categories, arr); }
+      return arr.filter(c=>c.active!==false).sort((a,b)=>(a.sort||0)-(b.sort||0));
+    },
+    async listCategoriesAll(){
+      if(this.cloud){
+        const {data,error}=await supa.from("categories").select("*").order("sort",{ascending:true});
+        if(error){ console.warn("listCategoriesAll",error.message); return []; }
+        return data||[];
+      }
+      let arr = read(LS.categories, null);
+      if(!arr){ arr = (window.STORE.CATEGORIES||[]).map((c,i)=>({...c,sort:i,active:true})); write(LS.categories, arr); }
+      return arr.slice().sort((a,b)=>(a.sort||0)-(b.sort||0));
+    },
+    async upsertCategory(cat){
+      const row = { key:cat.key, name:cat.name, type:cat.type||"tee", sort:+cat.sort||0, active:cat.active!==false };
+      if(this.cloud){
+        const {data,error}=await supa.from("categories").upsert(row,{onConflict:"key"}).select().single();
+        if(error) throw error; return data;
+      }
+      const arr = read(LS.categories, []);
+      const i = arr.findIndex(c=>c.key===row.key);
+      if(i>=0) arr[i]={...arr[i],...row}; else arr.push(row);
+      write(LS.categories, arr); return row;
+    },
+    async deleteCategory(key){
+      if(this.cloud){ const {error}=await supa.from("categories").delete().eq("key",key); if(error) throw error; return; }
+      write(LS.categories, read(LS.categories,[]).filter(c=>c.key!==key));
     },
 
     /* ============ ẢNH ============ */
