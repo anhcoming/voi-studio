@@ -1,0 +1,10 @@
+# File tạm dùng để chẩn đoán/chụp ảnh khi phát triển (Claude headless tests)
+__*
+*.png.tmp
+
+# Hệ điều hành / trình soạn thảo
+.DS_Store
+Thumbs.db
+
+# Phụ thuộc (nếu có sau này)
+node_modules/
