@@ -234,6 +234,10 @@ input,textarea,select{font-family:inherit}
 .badge.dark{background:var(--ink);box-shadow:0 4px 12px rgba(0,0,0,.18)}
 .card .quick{position:absolute;left:12px;right:12px;bottom:12px;z-index:3;opacity:0;transform:translateY(10px);transition:opacity .25s ease,transform .25s ease}
 .card:hover .quick{opacity:1;transform:translateY(0)}
+/* Nút giỏ ở góc dưới phải ảnh — dùng cho mobile (không có hover) */
+.card-cart{position:absolute;right:10px;bottom:10px;z-index:4;width:40px;height:40px;border-radius:50%;background:var(--ink);color:#fff;display:none;align-items:center;justify-content:center;box-shadow:var(--shadow);border:none;cursor:pointer;transition:transform .12s ease,background .15s}
+.card-cart:active{transform:scale(.9)}
+.card-cart svg{width:19px;height:19px}
 .card .info{padding:14px 4px 6px}
 .card .cat{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;font-weight:600}
 .card .name{font-size:13.5px;font-weight:500;line-height:1.4;min-height:37px;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;transition:color .15s}
@@ -353,6 +357,29 @@ input,textarea,select{font-family:inherit}
 .sg-result{margin-top:14px;font-size:14px;line-height:1.5;background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px}
 .sg-badge{display:inline-block;background:var(--ink);color:#fff;font-weight:800;padding:3px 13px;border-radius:20px;font-size:15px;margin:0 2px}
 @media(max-width:480px){ .sg-fields{grid-template-columns:1fr 1fr} .sg-fields .btn{grid-column:1/-1} }
+
+/* Popup thêm nhanh (quick add) */
+.qa-modal{max-width:420px}
+.qa-head{display:flex;gap:14px;margin-bottom:6px}
+.qa-thumb{flex:0 0 88px;width:88px;aspect-ratio:4/5;border-radius:10px;overflow:hidden;background:var(--bg-soft);display:block}
+.qa-thumb svg,.qa-thumb .thumb-img{width:100%;height:100%}
+.qa-meta{min-width:0}
+.qa-cat{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:4px}
+.qa-name{font-family:var(--font-display);text-transform:uppercase;font-size:16px;line-height:1.2;letter-spacing:-.01em;margin-bottom:8px}
+.qa-modal .opt-label{margin:18px 0 9px}
+.qa-modal .price .now{font-size:18px;font-weight:700}
+.qa-modal .price .was{font-size:13px}
+.qa-guide{margin-top:16px;border-top:1px solid var(--line);padding-top:8px}
+.qa-guide summary{cursor:pointer;font-size:13px;font-weight:600;padding:6px 0;list-style:none}
+.qa-guide summary::-webkit-details-marker{display:none}
+.mini-link{margin-top:10px;font-size:12.5px;font-weight:600;color:var(--sale);text-decoration:underline;background:none;border:none;cursor:pointer;padding:0}
+
+/* Nút lên đầu trang */
+.to-top{position:fixed;right:18px;bottom:18px;z-index:90;width:46px;height:46px;border-radius:50%;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-lg);border:none;cursor:pointer;opacity:0;visibility:hidden;transform:translateY(12px);transition:opacity .25s ease,transform .25s ease,visibility .25s,background .15s}
+.to-top.show{opacity:1;visibility:visible;transform:translateY(0)}
+.to-top:hover{background:#000}
+.to-top svg{width:20px;height:20px}
+@media(max-width:880px){ .to-top{right:14px;bottom:14px;width:42px;height:42px} }
 .gallery .thumbs{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
 .gallery .thumbs button{flex:0 0 78px;height:94px;border-radius:10px;overflow:hidden;border:2px solid transparent;background:var(--bg-soft);transition:.15s;padding:0}
 .gallery .thumbs button:hover{border-color:var(--line)}
@@ -446,6 +473,9 @@ input,textarea,select{font-family:inherit}
   .scroll-btn{display:none}
   .row .card{flex:0 0 200px}
   .hero{min-height:min(64vh,560px);padding:70px 0 60px}
+  /* Không có hover trên mobile → ẩn nút "Thêm nhanh" hover, hiện nút giỏ góc ảnh */
+  .card .quick{display:none}
+  .card-cart{display:flex}
 }
 @media(max-width:620px){
   .grid,.cats,.perks,.foot-grid{grid-template-columns:repeat(2,1fr)}
@@ -461,6 +491,13 @@ input,textarea,select{font-family:inherit}
   .cart-item > div:last-child{grid-column:1/-1;text-align:right}
   .pdp-actions{flex-direction:column}
   .modal{padding:22px}
+  /* Giảm cỡ chữ tiêu đề cho vừa màn mobile */
+  .page-title{font-size:23px}
+  .pdp-info h1{font-size:21px}
+  .section-head h2{font-size:21px}
+  .summary h3{font-size:16px}
+  .empty-cart .page-title{font-size:24px}
+  .pdp .price .now{font-size:23px}
 }
 @media(max-width:420px){
   .grid,.cats{grid-template-columns:1fr 1fr;gap:16px 12px}

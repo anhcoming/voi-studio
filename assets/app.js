@@ -206,7 +206,8 @@ function productCard(p){
         ${soldOut?`<span class="badge dark">Hết hàng</span>`: (p.sale?`<span class="badge">-${off}%</span>`:``)}
         ${media}
       </a>
-      ${soldOut?``:`<div class="quick"><button class="btn btn-dark btn-block add-quick" data-id="${p.id}">Thêm nhanh +</button></div>`}
+      ${soldOut?``:`<div class="quick"><button class="btn btn-dark btn-block qadd" data-id="${p.id}">Thêm nhanh +</button></div>
+      <button class="card-cart qadd" data-id="${p.id}" aria-label="Thêm nhanh vào giỏ" title="Thêm nhanh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h15l-1.5 9h-12z"/><path d="M6 6 5 3H2"/><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/></svg></button>`}
     </div>
     <div class="info">
       <div class="cat">${p.collection}</div>
@@ -222,17 +223,63 @@ function productCard(p){
 }
 function hashSeed(s){ let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0; return h%4; }
 
-/* quick add (chọn size đầu, màu đầu) */
+/* quick add → mở popup chọn size (kèm bảng size) rồi mới thêm vào giỏ */
 document.addEventListener("click", e=>{
-  const b = e.target.closest(".add-quick");
+  const b = e.target.closest(".qadd");
   if(!b) return;
-  e.preventDefault();
+  e.preventDefault(); e.stopPropagation();
   const p = S.getProduct(b.dataset.id);
   if(!p) return;
   if(p.stock!=null && p.stock<=0){ toast("Sản phẩm đã hết hàng"); return; }
-  Cart.add({ id:p.id, name:p.name, price:p.price, color:p.colors[0], size:p.sizes[0], qty:1 });
-  toast("Đã thêm vào giỏ");
+  openQuickAdd(p);
 });
+
+/* Popup thêm nhanh: chọn màu + size (bấm size = thêm vào giỏ), kèm bảng size */
+function openQuickAdd(p){
+  if(!p || $("#quickAddModal")) return;
+  let qaColor = p.colors[0];
+  const sizes = p.sizes||[];
+  const thumbHTML = ()=> p.image_url
+    ? `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}">`
+    : S.productSVG(p,{color:qaColor});
+  const sizeRows = (typeof SIZE_CHART!=="undefined"?SIZE_CHART:[]).filter(s=>sizes.includes(s.size))
+    .map(s=>`<tr><td><b>${s.size}</b></td><td>${s.hMin}–${s.hMax}</td><td>${s.wMin}–${s.wMax}</td></tr>`).join("");
+  const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="quickAddModal";
+  ov.innerHTML=`<div class="modal qa-modal">
+    <button class="modal-close" id="qaClose" aria-label="Đóng">×</button>
+    <div class="qa-head">
+      <a class="qa-thumb" href="product.html?id=${encodeURIComponent(p.id)}" id="qaThumb">${thumbHTML()}</a>
+      <div class="qa-meta">
+        <div class="qa-cat">${escapeXML(p.collection||p.catName||"")}</div>
+        <h3 class="qa-name">${escapeXML(p.name)}</h3>
+        <div class="price"><span class="now">${money(p.price)}</span>${p.compare>p.price?`<span class="was">${money(p.compare)}</span>`:""}</div>
+      </div>
+    </div>
+    ${p.colors.length>1?`<div class="opt-label">Màu sắc</div>
+      <div class="color-row" id="qaColors">${p.colors.map((c,i)=>`<button class="color-dot ${i===0?'active':''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join("")}</div>`:""}
+    <div class="opt-label">Chọn size <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:12px">— bấm size để thêm vào giỏ</span></div>
+    <div class="opt-row" id="qaSizes">${sizes.map(s=>`<button class="size-btn qa-size" data-s="${s}">${s}</button>`).join("")}</div>
+    ${sizeRows?`<details class="qa-guide">
+      <summary>📐 Bảng size tham khảo</summary>
+      <table class="sg-table" style="margin-top:10px"><thead><tr><th>Size</th><th>Cao (cm)</th><th>Nặng (kg)</th></tr></thead><tbody>${sizeRows}</tbody></table>
+      <button type="button" class="mini-link" id="qaFullGuide">Gợi ý size theo chiều cao / cân nặng →</button>
+    </details>`:""}
+  </div>`;
+  document.body.appendChild(ov);
+  requestAnimationFrame(()=>ov.classList.add("show"));
+  const close=()=>{ ov.classList.remove("show"); setTimeout(()=>ov.remove(),200); };
+  $("#qaClose").onclick=close; ov.addEventListener("click",e=>{ if(e.target===ov) close(); });
+  $$("#qaColors .color-dot").forEach(b=> b.onclick=()=>{
+    $$("#qaColors .color-dot").forEach(x=>x.classList.remove("active")); b.classList.add("active");
+    qaColor=b.dataset.c; if(!p.image_url) $("#qaThumb").innerHTML=thumbHTML();
+  });
+  $$("#qaSizes .qa-size").forEach(b=> b.onclick=()=>{
+    Cart.add({id:p.id,name:p.name,price:p.price,color:qaColor,size:b.dataset.s,qty:1});
+    toast("Đã thêm vào giỏ · size "+b.dataset.s);
+    close();
+  });
+  const fg=$("#qaFullGuide"); if(fg) fg.onclick=()=>{ close(); openSizeGuide(p.catKey); };
+}
 
 /* ---------------- HEADER + FOOTER ---------------- */
 function megaFor(catKey){
@@ -662,13 +709,12 @@ async function renderProduct(){
   // Gallery theo MÀU: ảnh của màu đang chọn → ảnh chung → SVG fallback
   function galleryFor(c){
     const ci = p.color_images || {};
-    let urls = (ci[c]||[]).filter(Boolean);
-    if(!urls.length){
-      // gộp tất cả ảnh theo màu (nếu có) để vẫn xem được, nếu màu này chưa gán ảnh
-      const all = Object.values(ci).flat().filter(Boolean);
-      urls = all.length ? all : (Array.isArray(p.images)?p.images.filter(Boolean):[]);
-    }
-    if(urls.length) return urls.map(u=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}">`);
+    const own = (ci[c]||[]).filter(Boolean);
+    if(own.length) return own.map(u=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}">`);
+    const flat = Array.isArray(p.images)?p.images.filter(Boolean):[];
+    // Màu mặc định (đầu tiên) chưa gán ảnh riêng → dùng ảnh thật chung (đẹp hơn)
+    if(c===p.colors[0] && flat.length) return flat.map(u=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}">`);
+    // Màu khác chưa có ảnh riêng → dựng mockup SVG đúng màu để bấm màu thấy đổi ngay
     return [S.productSVG(p,{color:c}), S.productSVG(p,{back:true,color:c})];
   }
   let gallery = galleryFor(color);
@@ -1105,6 +1151,19 @@ function hideAppLoader(){
   setTimeout(()=>el.remove(), 400);
 }
 
+/* ---------------- NÚT LÊN ĐẦU TRANG ---------------- */
+function initScrollTop(){
+  if($("#toTop")) return;
+  const b=document.createElement("button");
+  b.id="toTop"; b.className="to-top"; b.setAttribute("aria-label","Lên đầu trang");
+  b.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`;
+  document.body.appendChild(b);
+  b.onclick=()=>window.scrollTo({top:0,behavior:"smooth"});
+  const onScroll=()=>b.classList.toggle("show", window.scrollY>500);
+  window.addEventListener("scroll", onScroll, {passive:true});
+  onScroll();
+}
+
 /* ---------------- BOOT ---------------- */
 document.addEventListener("DOMContentLoaded", async ()=>{
   showAppLoader();
@@ -1122,6 +1181,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   // Khi user đăng nhập / đăng xuất, vẽ lại trang đơn hàng để chuyển giữa
   // "tra cứu bằng mã" và "danh sách đơn theo account"
   Auth.onChange(()=>{ if(document.body.dataset.page==="order") renderOrder(); });
+  initScrollTop();
   // Ẩn overlay loading sau khi trang đã dựng xong
   requestAnimationFrame(hideAppLoader);
 });
