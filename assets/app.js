@@ -44,7 +44,7 @@ const Cart = {
   count(){ return this.items.reduce((s,x)=>s+x.qty,0); },
   subtotal(){ return this.items.reduce((s,x)=>s+x.price*x.qty,0); },
 };
-function updateCartCount(){ $$(".cart-count").forEach(e => e.textContent = Cart.count()); }
+function updateCartCount(){ $$(".cart-count").forEach(e => e.textContent = Cart.count()); renderCartPop(); }
 
 /* ---------------- TOAST ---------------- */
 let toastT;
@@ -170,6 +170,15 @@ function productImage(p, opts){
   if(p.image_url) return `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy">`;
   return S.productSVG(p, opts||{seed:hashSeed(p.id)});
 }
+/* Ảnh của 1 dòng trong đơn hàng — ưu tiên ảnh đã lưu vào đơn lúc đặt (snapshot),
+   sau đó mới tra sản phẩm hiện tại, cuối cùng fallback SVG. Nhờ vậy đơn vẫn
+   hiển thị đúng ảnh kể cả khi sản phẩm bị ẩn / xoá / đổi sau này. */
+function orderItemImage(it){
+  if(it.image) return `<img class="thumb-img" src="${it.image}" alt="${escapeXML(it.name||"")}" loading="lazy">`;
+  const pr = S.getProduct(it.id);
+  if(pr) return productImage(pr,{color:it.color});
+  return S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color});
+}
 function formatCount(n){
   n = +n||0;
   if(n>=1000) return (n/1000).toFixed(n%1000===0?0:1).replace(/\.0$/,"") + "k";
@@ -269,7 +278,7 @@ function renderHeader(){
     <span>↩ Đổi trả miễn phí trong 7 ngày</span>
     <span>✨ Hàng mới về mỗi tuần</span>
     <span>💬 Hỗ trợ tư vấn 24/7</span>`;
-  const ann = `<div class="announce"><div class="track">${annItems}${annItems}</div></div>`;
+  const ann = `<div class="announce"><div class="track">${Array(4).fill(annItems).join("")}</div></div>`;
 
   const icon = (d)=>`<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const searchI = icon(`<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>`);
@@ -284,7 +293,10 @@ function renderHeader(){
     <div class="icons">
       <button class="icon-btn search-d" aria-label="Tìm kiếm" onclick="toast('Tìm kiếm chỉ là demo')">${searchI}</button>
       <span id="authSlot"></span>
-      <a class="icon-btn cart-link" href="cart.html" aria-label="Giỏ hàng">${cartI}<span class="cart-count">0</span></a>
+      <div class="cart-menu" id="cartMenu">
+        <a class="icon-btn cart-link" href="cart.html" aria-label="Giỏ hàng">${cartI}<span class="cart-count">0</span></a>
+        <div class="cart-pop" id="cartPop"></div>
+      </div>
     </div>
   </div></header>`;
 
@@ -308,8 +320,53 @@ function renderHeader(){
   const open=()=>{mnav.classList.add("open");ov.classList.add("show")};
   const close=()=>{mnav.classList.remove("open");ov.classList.remove("show")};
   $("#burger").onclick=open; $("#mclose").onclick=close; ov.onclick=close;
-  updateCartCount();
+  updateCartCount();   // cập nhật badge số lượng + vẽ mini-cart
   renderAuthSlot();
+  // Làm mới mini-cart mỗi lần rê chuột vào (đề phòng giỏ thay đổi ở tab khác)
+  const cm=$("#cartMenu"); if(cm) cm.addEventListener("mouseenter", renderCartPop);
+}
+
+/* Mini-cart: popup hover trên icon giỏ hàng — xem nhanh sản phẩm trong giỏ.
+   Tự vẽ lại mỗi khi giỏ thay đổi (qua updateCartCount trong Cart.save). */
+function renderCartPop(){
+  const pop = $("#cartPop");
+  if(!pop) return;
+  if(!Cart.items.length){
+    pop.innerHTML = `<div class="cart-pop-inner"><div class="cart-pop-empty">
+      <div class="ic">🛍️</div>
+      <p>Giỏ hàng đang trống</p>
+      <a class="btn btn-dark btn-block" href="collection.html">Mua sắm ngay</a>
+    </div></div>`;
+    return;
+  }
+  const sub = Cart.subtotal();
+  const rows = Cart.items.map((it,i)=>{
+    const p = S.getProduct(it.id);
+    const img = p ? productImage(p,{color:it.color})
+      : S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color});
+    const url = `product.html?id=${encodeURIComponent(it.id)}`;
+    return `<div class="cart-pop-item">
+      <a class="cpi-thumb" href="${url}">${img}</a>
+      <div class="cpi-info">
+        <a class="cpi-name" href="${url}">${escapeXML(it.name)}</a>
+        <div class="cpi-meta">${it.size?`Size ${escapeXML(it.size)} · `:""}SL ${it.qty}</div>
+        <div class="cpi-price">${money(it.price*it.qty)}</div>
+      </div>
+      <button class="cpi-rm" data-cprm="${i}" aria-label="Xóa" title="Xóa">×</button>
+    </div>`;
+  }).join("");
+  pop.innerHTML = `<div class="cart-pop-inner">
+    <div class="cart-pop-head">Giỏ hàng (${Cart.count()})</div>
+    <div class="cart-pop-list">${rows}</div>
+    <div class="cart-pop-foot">
+      <div class="cart-pop-sub"><span>Tạm tính</span><span>${money(sub)}</span></div>
+      <a class="btn btn-dark btn-block" href="cart.html">Xem giỏ &amp; thanh toán</a>
+    </div>
+  </div>`;
+  pop.querySelectorAll("[data-cprm]").forEach(b=> b.onclick=(e)=>{
+    e.preventDefault(); e.stopPropagation();
+    Cart.remove(+b.dataset.cprm);   // Cart.save() → updateCartCount() → renderCartPop()
+  });
 }
 
 function renderFooter(){
@@ -384,7 +441,7 @@ function renderHome(){
       <p>${S.BRAND.name} — local brand streetwear cho người trẻ dám thể hiện chất riêng.</p>
       <a class="btn btn-light" href="collection.html">Khám phá bộ sưu tập</a>
     </div>
-    <div class="ticker"><div class="track">${Array(2).fill(`<span>★ FREESHIP 500K</span><span>★ SALE 50%</span><span>★ NEW ARRIVALS</span><span>★ ${S.BRAND.tagline.toUpperCase()}</span>`).join("")}</div></div>
+    <div class="ticker"><div class="track">${Array(6).fill(`<span>★ FREESHIP 500K</span><span>★ SALE 50%</span><span>★ NEW ARRIVALS</span><span>★ ${S.BRAND.tagline.toUpperCase()}</span>`).join("")}</div></div>
   </section>`;
 
   const cats = `<section class="section tight"><div class="wrap">
@@ -396,7 +453,7 @@ function renderHome(){
           return `<a class="cat-tile" href="collection.html?cat=${k}" style="background:linear-gradient(135deg,${a},${b})"><span>${c.name}</span></a>`}).join("")}
     </div></div></section>`;
 
-  const strip = `<div class="strip"><div class="track">${Array(3).fill(`<span>${S.BRAND.name}</span><span class="star">✦</span><span>${S.BRAND.tagline.toUpperCase()}</span><span class="star">✦</span>`).join("")}</div></div>`;
+  const strip = `<div class="strip"><div class="track">${Array(8).fill(`<span>${S.BRAND.name}</span><span class="star">✦</span><span>${S.BRAND.tagline.toUpperCase()}</span><span class="star">✦</span>`).join("")}</div></div>`;
 
   const perks = `<section class="section tight"><div class="wrap"><div class="perks">
     <div class="perk"><div class="ic">🚚</div><h5>Freeship 500K</h5><p>Toàn quốc cho đơn từ 500.000₫</p></div>
@@ -451,9 +508,10 @@ function renderCollection(){
     <div class="crumb"><a href="index.html">Trang chủ</a> / ${title}</div>
     <h1 class="page-title">${title}</h1>
   </div>
+  <div class="filter-backdrop" id="fbackdrop"></div>
   <div class="wrap shop">
     <aside class="filters" id="filters">
-      <button class="close" id="fclose" style="display:none;font-size:24px;float:right">×</button>
+      <div class="filters-head"><span>Bộ lọc</span><button class="close" id="fclose" aria-label="Đóng">×</button></div>
       <div class="filter-group"><h4>Danh mục</h4>
         <label><input type="radio" name="cat" value="" ${!state.cat?'checked':''}> Tất cả</label>
         ${S.CATEGORIES.map(c=>`<label><input type="radio" name="cat" value="${c.key}" ${state.cat===c.key?'checked':''}> ${c.name}</label>`).join("")}
@@ -505,10 +563,13 @@ function renderCollection(){
   $$('input[name=price]').forEach(r=>r.onchange=e=>{state.price=e.target.value;apply()});
   $("#saleChk").onchange=e=>{state.sale=e.target.checked;apply()};
   $("#sort").onchange=e=>{state.sort=e.target.value;apply()};
-  // mobile filter drawer
-  const fil=$("#filters");
-  $("#ftoggle").onclick=()=>{fil.classList.add("open");$("#fclose").style.display="block"};
-  $("#fclose").onclick=()=>fil.classList.remove("open");
+  // mobile filter drawer (trượt từ trái, có backdrop + khoá cuộn nền)
+  const fil=$("#filters"), fbd=$("#fbackdrop");
+  const openF =()=>{ fil.classList.add("open");  fbd&&fbd.classList.add("show");  document.body.style.overflow="hidden"; };
+  const closeF=()=>{ fil.classList.remove("open"); fbd&&fbd.classList.remove("show"); document.body.style.overflow=""; };
+  $("#ftoggle").onclick=openF;
+  $("#fclose").onclick=closeF;
+  if(fbd) fbd.onclick=closeF;
   apply();
 }
 
@@ -667,7 +728,7 @@ function renderCart(){
     const items = Cart.items.map((it,i)=>{
       const p=S.getProduct(it.id);
       return `<div class="cart-item">
-        <a class="ci-thumb" href="product.html?id=${it.id}">${p?S.productSVG(p,{color:it.color}):""}</a>
+        <a class="ci-thumb" href="product.html?id=${it.id}">${p?productImage(p,{color:it.color}):S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color})}</a>
         <div>
           <h4><a href="product.html?id=${it.id}">${it.name}</a></h4>
           <div class="ci-meta">Màu: <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${it.color};vertical-align:middle;border:1px solid #ccc"></span> · Size: ${it.size}</div>
@@ -753,7 +814,8 @@ function openCheckout(){
     if(!name||!phone||!address){ toast("Vui lòng điền đủ tên, SĐT, địa chỉ"); return; }
     const btn=$("#ckSubmit"); btn.disabled=true; btn.textContent="Đang xử lý...";
     const order={ customer_name:name, phone, address, note:f.note.value.trim(),
-      items:Cart.items.map(x=>({id:x.id,name:x.name,price:x.price,color:x.color,size:x.size,qty:x.qty})),
+      items:Cart.items.map(x=>{ const p=S.getProduct(x.id);
+        return {id:x.id,name:x.name,price:x.price,color:x.color,size:x.size,qty:x.qty, image:(p&&p.image_url)||null}; }),
       subtotal:sub, shipping:ship, total:total };
     try{
       const saved=await DB.createOrder(order);
@@ -773,38 +835,48 @@ function openOrderDetailModal(o){
   const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;
   const steps=["pending","confirmed","shipping","completed"];
   const timeline = o.status==="cancelled"
-    ? `<div class="notice err">Đơn hàng này đã bị huỷ.</div>`
-    : `<div class="timeline">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;
-        return `<div class="tl-step ${done?'done':''}"><div class="tl-dot">${done?'✓':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div>`;
-  const items=(o.items||[]).map(it=>{const pr=S.getProduct(it.id);
-    const img = pr ? productImage(pr,{color:it.color}) : S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color});
-    return `<div class="cart-item">
-      <div class="ci-thumb">${img}</div>
-      <div><h4 style="font-size:14px">${escapeXML(it.name)}</h4><div class="ci-meta">Màu <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${it.color};border:1px solid #ccc;vertical-align:middle"></span> · Size ${escapeXML(it.size)} · SL ${it.qty}</div></div>
-      <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div></div>`;
+    ? `<div class="od-cancel">Đơn hàng này đã bị huỷ.</div>`
+    : `<div class="od-track-card"><div class="timeline">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;const cur=info.step===st.step;
+        return `<div class="tl-step ${done?'done':''} ${cur?'cur':''}"><div class="tl-dot">${done?'✓':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div></div>`;
+  const items=(o.items||[]).map(it=>{
+    const url=`product.html?id=${encodeURIComponent(it.id)}`;
+    return `<div class="od-item">
+      <a class="od-item-thumb" href="${url}">${orderItemImage(it)}</a>
+      <div class="od-item-info">
+        <a class="od-item-name" href="${url}">${escapeXML(it.name)}</a>
+        <div class="od-item-meta"><span class="od-swatch" style="background:${it.color||'#ccc'}"></span>${it.size?`Size ${escapeXML(it.size)} · `:""}SL ${it.qty}</div>
+      </div>
+      <div class="od-item-price"><div class="p-now">${money(it.price*it.qty)}</div>${it.qty>1?`<div class="p-unit">${money(it.price)} × ${it.qty}</div>`:""}</div>
+    </div>`;
   }).join("");
 
   const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="orderDetailModal";
-  ov.innerHTML=`<div class="modal" style="max-width:680px">
+  ov.innerHTML=`<div class="modal od-modal" style="--od-accent:${st.color}">
     <button class="modal-close" id="odClose" aria-label="Đóng">×</button>
-    <h3 class="modal-title">Đơn ${escapeXML(o.code)}</h3>
-    <div style="margin-bottom:16px"><span class="status-pill" style="background:${st.color}">${st.label}</span>
-      <span class="muted" style="margin-left:10px;font-size:13px">Đặt lúc ${new Date(o.created_at).toLocaleString("vi-VN")}</span></div>
-    ${timeline}
-    <h4 style="font-family:var(--font-display);text-transform:uppercase;font-size:14px;letter-spacing:.05em;margin:24px 0 10px">Sản phẩm (${(o.items||[]).length})</h4>
-    ${items}
-    <div style="margin-top:18px;padding:14px 16px;background:var(--bg-soft);border-radius:10px">
-      <h5 style="font-family:var(--font-display);text-transform:uppercase;font-size:12.5px;letter-spacing:.05em;margin-bottom:8px">Giao tới</h5>
-      <p style="font-size:13.5px;line-height:1.8">
-        <b>${escapeXML(o.customer_name||"")}</b> · ${escapeXML(o.phone||"")}<br>
-        ${escapeXML(o.address||"")}
-        ${o.note?`<br><span class="muted">Ghi chú: ${escapeXML(o.note)}</span>`:""}
-      </p>
+    <div class="od-head">
+      <div class="od-head-top">
+        <div><div class="od-eyebrow">Đơn hàng</div><h3 class="od-code">#${escapeXML(o.code)}</h3></div>
+        <span class="status-pill" style="background:${st.color}">${st.label}</span>
+      </div>
+      <div class="od-date">🕒 Đặt lúc ${new Date(o.created_at).toLocaleString("vi-VN")}</div>
     </div>
-    <div class="ck-summary" style="margin-top:14px">
-      <div class="line"><span>Tạm tính</span><span>${money(o.subtotal||0)}</span></div>
-      <div class="line"><span>Giao hàng</span><span>${o.shipping?money(o.shipping):"Miễn phí"}</span></div>
-      <div class="total"><span>Tổng cộng</span><span>${money(o.total||0)}</span></div>
+    <div class="od-body">
+      ${timeline}
+      <div class="od-section">
+        <div class="od-section-title">Sản phẩm <span class="muted">(${(o.items||[]).length})</span></div>
+        <div class="od-items">${items}</div>
+      </div>
+      <div class="od-grid">
+        <div class="od-card">
+          <div class="od-card-title">📍 Giao tới</div>
+          <div class="od-ship"><span class="name">${escapeXML(o.customer_name||"")}</span> · ${escapeXML(o.phone||"")}<br>${escapeXML(o.address||"")}${o.note?`<br><span class="muted">Ghi chú: ${escapeXML(o.note)}</span>`:""}</div>
+        </div>
+        <div class="od-card od-sum">
+          <div class="line"><span>Tạm tính</span><span>${money(o.subtotal||0)}</span></div>
+          <div class="line"><span>Giao hàng</span><span>${o.shipping?money(o.shipping):"Miễn phí"}</span></div>
+          <div class="total"><span>Tổng cộng</span><span>${money(o.total||0)}</span></div>
+        </div>
+      </div>
     </div>
   </div>`;
   document.body.appendChild(ov);
@@ -889,9 +961,9 @@ async function renderOrder(){
     : `<div class="timeline">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;
         return `<div class="tl-step ${done?'done':''}"><div class="tl-dot">${done?'✓':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div>`;
 
-  const items=(o.items||[]).map(it=>{const pr=S.getProduct(it.id);
+  const items=(o.items||[]).map(it=>{
     return `<div class="cart-item">
-      <div class="ci-thumb">${pr?productImage(pr,{color:it.color}):S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color})}</div>
+      <div class="ci-thumb">${orderItemImage(it)}</div>
       <div><h4>${it.name}</h4><div class="ci-meta">Màu <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${it.color};border:1px solid #ccc;vertical-align:middle"></span> · Size ${it.size} · SL ${it.qty}</div></div>
       <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div></div>`;}).join("");
 
@@ -928,8 +1000,23 @@ const Catalog = { loaded:false, async load(){
   this.loaded=true;
 }};
 
+/* ---------------- LOADING OVERLAY ---------------- */
+function showAppLoader(){
+  if($("#appLoader")) return;
+  const el=document.createElement("div");
+  el.className="app-loader"; el.id="appLoader";
+  el.innerHTML=`<div class="al-logo">${S.BRAND.name}<span class="dot">.</span></div><div class="app-spinner"></div>`;
+  document.body.appendChild(el);
+}
+function hideAppLoader(){
+  const el=$("#appLoader"); if(!el) return;
+  el.classList.add("hide");
+  setTimeout(()=>el.remove(), 400);
+}
+
 /* ---------------- BOOT ---------------- */
 document.addEventListener("DOMContentLoaded", async ()=>{
+  showAppLoader();
   await Promise.all([Catalog.load(), Auth.init()]);
   renderHeader();
   renderFooter();
@@ -942,4 +1029,6 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   // Khi user đăng nhập / đăng xuất, vẽ lại trang đơn hàng để chuyển giữa
   // "tra cứu bằng mã" và "danh sách đơn theo account"
   Auth.onChange(()=>{ if(document.body.dataset.page==="order") renderOrder(); });
+  // Ẩn overlay loading sau khi trang đã dựng xong
+  requestAnimationFrame(hideAppLoader);
 });
