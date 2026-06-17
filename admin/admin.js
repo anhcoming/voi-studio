@@ -196,8 +196,10 @@ async function renderProducts(){
 
 function productModal(p){
   const editing=!!p;
-  p = p || {name:"",print:"",catKey:"ao-thun",collection:"",price:0,compare:0,stock:50,colors:["#1c1c1c","#f0ede6"],sizes:["S","M","L","XL"],image_url:null,active:true};
-  let image = p.image_url||null;
+  p = p || {name:"",print:"",catKey:"ao-thun",collection:"",price:0,compare:0,stock:50,colors:["#1c1c1c","#f0ede6"],sizes:["S","M","L","XL"],images:[],image_url:null,active:true};
+  // images = array URL. Back-compat: nếu chỉ có image_url cũ → đưa vào array.
+  let images = (Array.isArray(p.images) && p.images.length ? p.images.slice()
+                : (p.image_url ? [p.image_url] : []));
   let colors = (p.colors&&p.colors.length?p.colors:["#1c1c1c"]).slice();
 
   const catOpts = S.CATEGORIES.map(c=>`<option value="${c.key}" ${p.catKey===c.key?"selected":""}>${c.name}</option>`).join("");
@@ -224,9 +226,9 @@ function productModal(p){
       <div class="fld"><span>Màu sắc</span><div class="colorchips" id="chips"></div>
         <button type="button" class="mini" id="addColor" style="margin-top:8px">+ Thêm màu</button></div>
       <div class="fld"><span>Kích cỡ</span><div class="sizebox" id="sizes">${sizeBoxes}</div></div>
-      <div class="fld"><span>Ảnh sản phẩm</span>
-        <label class="img-drop" id="drop">Bấm để chọn ảnh (jpg/png)…<input type="file" id="imgfile" accept="image/*" hidden></label>
-        <div class="img-preview" id="prev"></div>
+      <div class="fld"><span>Ảnh sản phẩm <small style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;font-size:11px;margin-left:6px">ảnh đầu = ảnh chính, kéo ◀ ▶ để đổi thứ tự</small></span>
+        <div class="img-gallery" id="gallery"></div>
+        <label class="img-drop" id="drop">＋ Bấm để thêm ảnh (có thể chọn nhiều)<input type="file" id="imgfile" accept="image/*" multiple hidden></label>
       </div>
       <label class="fld" style="display:flex;align-items:center;gap:8px;flex-direction:row">
         <input type="checkbox" name="active" ${p.active!==false?"checked":""} style="width:18px;height:18px"> <span style="margin:0">Hiển thị trên cửa hàng</span></label>
@@ -238,21 +240,51 @@ function productModal(p){
     $$("#chips input[type=color]").forEach(inp=> inp.oninput=()=>{ colors[+inp.dataset.i]=inp.value; drawPrev(); });
     $$("#chips [data-del]").forEach(b=> b.onclick=()=>{ if(colors.length>1){ colors.splice(+b.dataset.del,1); drawChips(); drawPrev(); } });
   }
-  function drawPrev(){
-    if(image){ $("#prev").innerHTML=`<img src="${esc(image)}" alt="">`; return; }
-    const cat=S.CATEGORIES.find(c=>c.key===$("[name=catKey]").value)||{type:"tee"};
-    const fake={type:cat.type,print:$("[name=print]").value||$("[name=name]").value||"PRINT",collection:$("[name=collection]").value||"",colors:colors,name:"preview"};
-    $("#prev").innerHTML=S.productSVG(fake,{seed:0});
+  function drawGallery(){
+    const g = $("#gallery");
+    if(!images.length){
+      const cat=S.CATEGORIES.find(c=>c.key===$("[name=catKey]")?.value)||{type:"tee"};
+      const fake={type:cat.type,print:($("[name=print]")?.value)||($("[name=name]")?.value)||"PRINT",collection:($("[name=collection]")?.value)||"",colors:colors,name:"preview"};
+      g.innerHTML=`<div class="img-empty">${S.productSVG(fake,{seed:0})}<span>Chưa có ảnh — sẽ dùng ảnh tự sinh từ chữ in & màu</span></div>`;
+      return;
+    }
+    g.innerHTML = images.map((url,i)=>`
+      <div class="img-tile ${i===0?'is-main':''}" data-i="${i}">
+        <img src="${esc(url)}" alt="">
+        ${i===0?`<span class="img-badge">Ảnh chính</span>`:``}
+        <div class="img-tools">
+          <button type="button" class="img-btn" data-act="left"  data-i="${i}" title="Sang trái"  ${i===0?'disabled':''}>◀</button>
+          <button type="button" class="img-btn" data-act="right" data-i="${i}" title="Sang phải" ${i===images.length-1?'disabled':''}>▶</button>
+          <button type="button" class="img-btn danger" data-act="del" data-i="${i}" title="Xoá">×</button>
+        </div>
+      </div>`).join("");
+    $$(".img-btn", g).forEach(b=> b.onclick=()=>{
+      const i = +b.dataset.i, act = b.dataset.act;
+      if(act==="del") images.splice(i,1);
+      if(act==="left" && i>0){ const t=images[i-1]; images[i-1]=images[i]; images[i]=t; }
+      if(act==="right" && i<images.length-1){ const t=images[i+1]; images[i+1]=images[i]; images[i]=t; }
+      drawGallery();
+    });
   }
-  drawChips(); drawPrev();
+  drawChips(); drawGallery();
   $("#addColor").onclick=()=>{ colors.push("#888888"); drawChips(); };
-  $("[name=catKey]").onchange=drawPrev; $("[name=print]").oninput=drawPrev; $("[name=name]").oninput=()=>{ if(!image)drawPrev(); };
+  $("[name=catKey]").onchange=drawGallery; $("[name=print]").oninput=drawGallery; $("[name=name]").oninput=()=>{ if(!images.length) drawGallery(); };
   $("#drop").onclick=()=>$("#imgfile").click();
   $("#imgfile").onchange=async(e)=>{
-    const f=e.target.files[0]; if(!f) return;
-    $("#drop").textContent="Đang tải ảnh…";
-    try{ image=await DB.uploadImage(f); drawPrev(); $("#drop").textContent="✓ Đã chọn ảnh — bấm để đổi"; }
-    catch(err){ toast("Lỗi tải ảnh: "+(err.message||err)); $("#drop").textContent="Bấm để chọn ảnh…"; }
+    const files = Array.from(e.target.files||[]); if(!files.length) return;
+    const drop=$("#drop"); const original=drop.textContent;
+    let done=0;
+    drop.textContent=`Đang tải ảnh… 0/${files.length}`;
+    for(const f of files){
+      try{
+        const url = await DB.uploadImage(f);
+        images.push(url); done++;
+        drop.textContent=`Đang tải ảnh… ${done}/${files.length}`;
+        drawGallery();
+      }catch(err){ toast("Lỗi tải ảnh "+f.name+": "+(err.message||err)); }
+    }
+    drop.textContent="＋ Bấm để thêm ảnh nữa";
+    e.target.value=""; // cho phép chọn lại cùng file nếu cần
   };
 
   $("#pform").onsubmit=async(e)=>{
@@ -263,7 +295,8 @@ function productModal(p){
       name:f.name.value.trim(), print:f.print.value.trim(),
       catKey:f.catKey.value, collection:f.collection.value.trim(),
       price:+f.price.value||0, compare:+f.compare.value||0, stock:+f.stock.value||0,
-      colors, sizes:sizes.length?sizes:["Freesize"], image_url:image, active:f.active.checked,
+      colors, sizes:sizes.length?sizes:["Freesize"],
+      images, image_url:images[0]||null, active:f.active.checked,
     };
     if(!prod.name){ toast("Nhập tên sản phẩm"); return; }
     const btn=$("#psave"); btn.disabled=true; btn.textContent="Đang lưu…";
