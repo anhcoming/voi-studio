@@ -14,25 +14,40 @@
   const read  = (k,d)=>{ try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
   const write = (k,v)=> localStorage.setItem(k, JSON.stringify(v));
 
+  /* ---- chuẩn hoá images: nhận array | string | image_url cũ → trả về array URL ---- */
+  function normImages(row){
+    let arr = row.images;
+    if(typeof arr === "string"){ try{ arr = JSON.parse(arr); }catch(e){ arr = []; } }
+    if(!Array.isArray(arr)) arr = [];
+    arr = arr.map(x => typeof x === "string" ? x : (x?.url || "")).filter(Boolean);
+    // Back-compat: image_url cũ → bổ sung vào đầu nếu chưa có
+    if(row.image_url && !arr.includes(row.image_url)) arr.unshift(row.image_url);
+    return arr;
+  }
+
   /* ---- map giữa DB row và product dùng ở giao diện ---- */
   function mapProduct(row){
     const cat = (window.STORE.CATEGORIES||[]).find(c=>c.key===row.cat_key) || {name:row.cat_key||"", type:"tee"};
+    const images = normImages(row);
     return {
       id: row.id, catKey: row.cat_key, type: cat.type, catName: cat.name,
       collection: row.collection||"", name: row.name, shortName: row.print||row.name,
       print: row.print||row.name, price: +row.price||0, compare: +row.compare||0,
       colors: row.colors||[], sizes: row.sizes||["S","M","L","XL"],
-      stock: row.stock==null?0:+row.stock, image_url: row.image_url||null,
+      stock: row.stock==null?0:+row.stock,
+      images, image_url: images[0] || null,
       active: row.active!==false, sort: +row.sort||0,
       sale: (+row.compare||0) > (+row.price||0),
     };
   }
   function toRow(p){
+    const images = Array.isArray(p.images) ? p.images.filter(Boolean) : normImages(p);
     const r = {
       name:p.name, print:p.print||p.shortName||p.name, cat_key:p.catKey,
       collection:p.collection||"", price:+p.price||0, compare:+p.compare||0,
       colors:p.colors||[], sizes:p.sizes||["S","M","L","XL"],
-      stock:p.stock==null?0:+p.stock, image_url:p.image_url||null,
+      stock:p.stock==null?0:+p.stock,
+      images, image_url: images[0] || null,
       active:p.active!==false, sort:+p.sort||0,
     };
     if(p.id && isUUID(p.id)) r.id = p.id;
@@ -44,9 +59,11 @@
   function normalize(row){
     if(row && row.cat_key !== undefined) return mapProduct(row);
     const cat = (window.STORE.CATEGORIES||[]).find(c=>c.key===row.catKey) || {name:row.catName||"", type:row.type||"tee"};
+    const images = normImages(row);
     return { ...row, type:row.type||cat.type, catName:row.catName||cat.name,
       colors:row.colors||[], sizes:row.sizes||["S","M","L","XL"],
-      stock: row.stock==null?0:+row.stock, image_url:row.image_url||null,
+      stock: row.stock==null?0:+row.stock,
+      images, image_url: images[0] || row.image_url || null,
       active: row.active!==false, sort:+row.sort||0, sale:(+row.compare||0)>(+row.price||0) };
   }
 
@@ -91,13 +108,20 @@
     },
     async upsertProduct(p){
       if(this.cloud){
-        const {data,error} = await supa.from("products").upsert(toRow(p)).select().single();
+        const row = toRow(p);
+        let {data,error} = await supa.from("products").upsert(row).select().single();
+        // Fallback nếu DB chưa có column `images` (migration chưa chạy)
+        if(error && /column.*images/i.test(error.message||"")){
+          const {images, ...rowNoImg} = row;
+          ({data,error} = await supa.from("products").upsert(rowNoImg).select().single());
+        }
         if(error) throw error; return mapProduct(data);
       }
       const arr = read(LS.products, []);
-      if(p.id){ const i=arr.findIndex(x=>x.id===p.id); if(i>=0) arr[i]={...arr[i],...p}; else arr.push(p); }
-      else { p.id = "loc-"+Date.now().toString(36); arr.push(p); }
-      write(LS.products, arr); return normalize(p);
+      const norm = normalize(p);
+      if(p.id){ const i=arr.findIndex(x=>x.id===p.id); if(i>=0) arr[i]={...arr[i],...norm}; else arr.push(norm); }
+      else { norm.id = "loc-"+Date.now().toString(36); arr.push(norm); }
+      write(LS.products, arr); return norm;
     },
     async deleteProduct(id){
       if(this.cloud){ const {error}=await supa.from("products").delete().eq("id",id); if(error) throw error; return; }

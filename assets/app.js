@@ -523,10 +523,17 @@ async function renderProduct(){
   const soldOut = (p.stock!=null && p.stock<=0);
 
   const gallery = [];
-  if(p.image_url) gallery.push(`<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}">`);
-  gallery.push(S.productSVG(p,{color:p.colors[0]}));
-  gallery.push(S.productSVG(p,{back:true,color:p.colors[0]}));
-  if(p.colors[1]) gallery.push(S.productSVG(p,{color:p.colors[1],seed:2}));
+  const imgs = Array.isArray(p.images) ? p.images.filter(Boolean) : [];
+  if(imgs.length){
+    // Có ảnh thật → dùng toàn bộ ảnh do admin upload (theo đúng thứ tự)
+    imgs.forEach(url => gallery.push(`<img class="thumb-img" src="${url}" alt="${escapeXML(p.name)}">`));
+  } else {
+    // Fallback: 1 ảnh image_url cũ (nếu có) + SVG variants
+    if(p.image_url) gallery.push(`<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}">`);
+    gallery.push(S.productSVG(p,{color:p.colors[0]}));
+    gallery.push(S.productSVG(p,{back:true,color:p.colors[0]}));
+    if(p.colors[1]) gallery.push(S.productSVG(p,{color:p.colors[1],seed:2}));
+  }
 
   root.innerHTML = `
   <div class="wrap page-head">
@@ -807,8 +814,8 @@ async function renderOrder(){
           const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;
           return `<button type="button" class="my-orders-row" data-code="${escapeXML(o.code)}">
             <div><div class="mo-code">${escapeXML(o.code)}</div><div class="mo-date">${new Date(o.created_at).toLocaleString("vi-VN")} · ${(o.items||[]).reduce((s,i)=>s+i.qty,0)} sản phẩm</div></div>
-            <div style="text-align:right"><div style="font-weight:700">${money(o.total||0)}</div><div class="mo-status" style="background:${st.color};margin-top:4px">${st.label}</div></div>
-            <span style="color:var(--muted)">›</span>
+            <div class="mo-meta-right"><div class="mo-total">${money(o.total||0)}</div><span class="mo-status" style="background:${st.color}">${st.label}</span></div>
+            <span class="mo-arrow" aria-hidden="true">›</span>
           </button>`;
         }).join("");
       } else {
