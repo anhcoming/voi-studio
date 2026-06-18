@@ -29,6 +29,54 @@ const LAST_CONTACT_KEY = "originals_last_contact_v1";
 function saveLastContact(c){ try{ localStorage.setItem(LAST_CONTACT_KEY, JSON.stringify(c)); }catch(e){} }
 function getLastContact(){ try{ return JSON.parse(localStorage.getItem(LAST_CONTACT_KEY)||"null"); }catch(e){ return null; } }
 
+/* ---------------- EMAIL (gửi xác nhận đơn hàng qua EmailJS) ----------------
+   Bật bằng cách dán 3 key EMAILJS_* trong assets/config.js. Nếu thiếu,
+   module tự tắt — đặt hàng vẫn chạy bình thường, chỉ không gửi email. */
+const Email = {
+  inited: false,
+  get cfg(){ const c=window.CONFIG||{}; return {pk:c.EMAILJS_PUBLIC_KEY||"", svc:c.EMAILJS_SERVICE_ID||"", tpl:c.EMAILJS_TEMPLATE_ID||""}; },
+  get enabled(){ const {pk,svc,tpl}=this.cfg; return !!(pk&&svc&&tpl&&window.emailjs); },
+  init(){
+    if(this.inited || !this.enabled) return;
+    try{ window.emailjs.init({publicKey:this.cfg.pk}); this.inited=true; }
+    catch(e){ console.warn("EmailJS init",e); }
+  },
+  // Định dạng item dạng text dễ đọc trong email (template plain-text vẫn xài được)
+  formatItems(items){
+    return (items||[]).map(it=>{
+      const opts=[it.color?`màu ${it.color}`:"", it.size?`size ${it.size}`:""].filter(Boolean).join(", ");
+      return `• ${it.name}${opts?` (${opts})`:""} × ${it.qty} — ${money(it.price*it.qty)}`;
+    }).join("\n");
+  },
+  async sendConfirmation(order){
+    if(!this.enabled) return {sent:false, reason:"disabled"};
+    const to=(order.email||"").trim(); if(!to) return {sent:false, reason:"no-email"};
+    this.init();
+    const trackingUrl = `${location.origin}${location.pathname.replace(/[^/]+$/,"")}order.html?code=${encodeURIComponent(order.code)}`;
+    const params = {
+      to_email: to,
+      to_name: order.customer_name || "",
+      order_code: order.code,
+      order_total: money(order.total||0),
+      order_subtotal: money(order.subtotal||0),
+      order_shipping: order.shipping ? money(order.shipping) : "Miễn phí",
+      order_items: this.formatItems(order.items),
+      order_address: order.address || "",
+      order_phone: order.phone || "",
+      order_note: order.note || "",
+      tracking_url: trackingUrl,
+      store_name: (window.CONFIG&&window.CONFIG.STORE_NAME) || (S.BRAND&&S.BRAND.name) || "Shop",
+    };
+    try{
+      await window.emailjs.send(this.cfg.svc, this.cfg.tpl, params);
+      return {sent:true};
+    }catch(e){
+      console.warn("EmailJS send fail",e);
+      return {sent:false, reason:"error", error:e};
+    }
+  },
+};
+
 /* ---------------- GIỎ HÀNG (localStorage) ---------------- */
 const CART_KEY = "originals_cart_v1";
 const Cart = {
@@ -898,6 +946,8 @@ function renderCart(){
 }
 
 /* ---------------- CHECKOUT (đặt hàng) ---------------- */
+function isValidEmail(s){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s||"").trim()); }
+
 function openCheckout(){
   if(!Cart.items.length){ toast("Giỏ hàng trống"); return; }
   const sub=Cart.subtotal(); const ship = sub>=500000?0:30000; const total=sub+ship;
@@ -905,6 +955,7 @@ function openCheckout(){
   const prefillName = (Auth.isLoggedIn() && Auth.displayName()) || last.customer_name || "";
   const prefillPhone = last.phone || "";
   const prefillAddress = last.address || "";
+  const prefillEmail = (Auth.isLoggedIn() && Auth.email()) || last.email || "";
   const accountInfo = Auth.isLoggedIn()
     ? `<div class="notice" style="background:#eef7f1;color:#1d6c4d;border:1px solid #c5e6d4;font-size:13px">
         Đặt hàng với tài khoản <b>${escapeXML(Auth.email())}</b> — đơn sẽ lưu vào "Đơn của tôi".
@@ -912,6 +963,9 @@ function openCheckout(){
     : `<div class="notice" style="background:#fff6e0;color:#7a5b00;border:1px solid #f0d98a;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px">
         <span>Mẹo: <a href="#" id="ckLogin" style="text-decoration:underline;color:inherit"><b>Đăng nhập Google</b></a> để lưu đơn vào tài khoản & xem trên mọi thiết bị.</span>
        </div>`;
+  const emailHint = Email.enabled
+    ? `Email xác nhận đơn hàng sẽ được gửi tới đây.`
+    : `Dùng để liên hệ khi cần xác nhận đơn.`;
   const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="checkoutModal";
   ov.innerHTML=`<div class="modal">
     <button class="modal-close" id="ckClose" aria-label="Đóng">×</button>
@@ -920,6 +974,8 @@ function openCheckout(){
     <form id="ckForm" novalidate>
       <label class="fld"><span>Họ và tên *</span><input name="name" required value="${escapeXML(prefillName)}"></label>
       <label class="fld"><span>Số điện thoại *</span><input name="phone" required inputmode="tel" value="${escapeXML(prefillPhone)}"></label>
+      <label class="fld"><span>Email *</span><input name="email" type="email" required inputmode="email" autocomplete="email" placeholder="ban@example.com" value="${escapeXML(prefillEmail)}">
+        <small class="muted" style="font-size:12px;display:block;margin-top:4px">${emailHint}</small></label>
       <label class="fld"><span>Địa chỉ nhận hàng *</span><textarea name="address" rows="2" required>${escapeXML(prefillAddress)}</textarea></label>
       <label class="fld"><span>Ghi chú (tuỳ chọn)</span><input name="note"></label>
       <div class="ck-summary">
@@ -940,18 +996,25 @@ function openCheckout(){
   $("#ckForm").onsubmit=async(e)=>{
     e.preventDefault();
     const f=e.target;
-    const name=f.name.value.trim(), phone=f.phone.value.trim(), address=f.address.value.trim();
-    if(!name||!phone||!address){ toast("Vui lòng điền đủ tên, SĐT, địa chỉ"); return; }
+    const name=f.name.value.trim(), phone=f.phone.value.trim(),
+          email=f.email.value.trim(), address=f.address.value.trim();
+    if(!name||!phone||!address||!email){ toast("Vui lòng điền đủ tên, SĐT, email, địa chỉ"); return; }
+    if(!isValidEmail(email)){ toast("Email không hợp lệ"); f.email.focus(); return; }
     const btn=$("#ckSubmit"); btn.disabled=true; btn.textContent="Đang xử lý...";
-    const order={ customer_name:name, phone, address, note:f.note.value.trim(),
+    const order={ customer_name:name, phone, email, address, note:f.note.value.trim(),
       items:Cart.items.map(x=>{ const p=S.getProduct(x.id);
         return {id:x.id,name:x.name,price:x.price,color:x.color,size:x.size,qty:x.qty, image:(p&&p.image_url)||null}; }),
       subtotal:sub, shipping:ship, total:total };
     try{
       const saved=await DB.createOrder(order);
       saveMyOrder(saved);
-      saveLastContact({customer_name:name, phone, address});
+      saveLastContact({customer_name:name, phone, email, address});
       Cart.items=[]; Cart.save();
+      // Gửi email xác nhận (không chặn redirect — nếu lỗi vẫn vào trang đơn)
+      const orderForEmail = { ...saved, email };
+      Email.sendConfirmation(orderForEmail).then(r=>{
+        if(r.sent) sessionStorage.setItem("ck_email_sent_"+saved.code, email);
+      });
       location.href="order.html?code="+encodeURIComponent(saved.code)+"&new=1";
     }catch(err){
       console.error(err); btn.disabled=false; btn.textContent="Đặt hàng (COD)";
@@ -1120,7 +1183,15 @@ async function renderOrder(){
       <a class="btn btn-outline btn-block" style="margin-top:16px" href="collection.html">Tiếp tục mua sắm</a>
     </aside>
   </div>`;
-  if(param("new")==="1") toast("Đặt hàng thành công! Mã đơn: "+o.code);
+  if(param("new")==="1"){
+    const sentTo = sessionStorage.getItem("ck_email_sent_"+o.code);
+    if(sentTo){
+      toast("Đặt hàng thành công! Đã gửi email xác nhận tới "+sentTo);
+      sessionStorage.removeItem("ck_email_sent_"+o.code);
+    } else {
+      toast("Đặt hàng thành công! Mã đơn: "+o.code);
+    }
+  }
 }
 
 /* ---------------- CATEGORIES ---------------- */

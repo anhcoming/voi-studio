@@ -228,7 +228,7 @@ function orderModal(o){
     <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div></div>`).join("");
   openModal(`<h3 class="modal-title">Đơn ${esc(o.code)}</h3>
     <p style="font-size:14px;line-height:1.8;margin-bottom:14px">
-      <b>${esc(o.customer_name||"")}</b> · ${esc(o.phone||"")}<br>${esc(o.address||"")}
+      <b>${esc(o.customer_name||"")}</b> · ${esc(o.phone||"")}${o.email?` · <a href="mailto:${esc(o.email)}">${esc(o.email)}</a>`:""}<br>${esc(o.address||"")}
       ${o.note?`<br><span class="muted">Ghi chú: ${esc(o.note)}</span>`:""}</p>
     ${items}
     <div class="ck-summary" style="margin-top:14px">

@@ -227,10 +227,16 @@
       const code = genCode();
       const user = await this.getUser();
       const row = { code, status:"pending", customer_name:o.customer_name, phone:o.phone,
+        email:(o.email||"").trim().toLowerCase()||null,
         address:o.address, note:o.note||"", items:o.items, subtotal:o.subtotal,
         shipping:o.shipping, total:o.total, user_id: user?.id || null };
       if(this.cloud){
-        const {data,error}=await supa.from("orders").insert(row).select().single();
+        let {data,error}=await supa.from("orders").insert(row).select().single();
+        // Fallback: nếu chưa chạy migration thêm cột email, vẫn cho đặt đơn
+        if(error && /column.*email/i.test(error.message||"")){
+          const {email, ...rest}=row;
+          ({data,error}=await supa.from("orders").insert(rest).select().single());
+        }
         if(error) throw error;
         await this.adjustStock(o.items,-1);
         return data;
