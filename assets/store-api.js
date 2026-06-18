@@ -244,21 +244,25 @@
       if(validUserId) row.user_id = validUserId;  // không gắn nếu null → tránh xung đột default
       console.info("[Order] inserting:", {code, user_id: validUserId, mode: this.cloud?"cloud":"local"});
       if(this.cloud){
-        let {data,error}=await supa.from("orders").insert(row).select().single();
+        // KHÔNG dùng .select() sau insert: PostgREST sẽ chạy SELECT policy lên row
+        // vừa insert; với khách (anon) thì cả 2 policy SELECT (is_admin, user_id=auth.uid)
+        // đều fail → 42501. Vì `code` đã tự sinh ở client nên không cần đọc lại.
+        let {error}=await supa.from("orders").insert(row);
         // Fallback 1: chưa chạy migration thêm cột email → insert lại không có email
         if(error && /column.*email/i.test(error.message||"")){
           const {email, ...rest}=row;
-          ({data,error}=await supa.from("orders").insert(rest).select().single());
+          ({error}=await supa.from("orders").insert(rest));
         }
         // Fallback 2: RLS reject vì session lệch → bỏ user_id, đặt như guest
         if(error && /row-level security|violates.*policy/i.test(error.message||"") && row.user_id){
           console.warn("[Order] RLS reject với user_id, thử lại như guest (không gắn user_id)");
           const {user_id, ...guestRow}=row;
-          ({data,error}=await supa.from("orders").insert(guestRow).select().single());
+          ({error}=await supa.from("orders").insert(guestRow));
         }
         if(error) throw error;
         await this.adjustStock(o.items,-1);
-        return data;
+        // Dựng lại row ở client (id thật của DB ta không cần — dùng code làm khoá)
+        return {...row, id:code, created_at:new Date().toISOString()};
       }
       const arr = read(LS.orders, []);
       const full = {...row, id:code, created_at:new Date().toISOString()};
