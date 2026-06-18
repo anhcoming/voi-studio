@@ -134,9 +134,15 @@ input,textarea,select{font-family:inherit}
 .cart-pop-empty{padding:30px 18px;text-align:center}
 .cart-pop-empty .ic{font-size:34px;margin-bottom:10px;line-height:1}
 .cart-pop-empty p{font-size:13.5px;color:var(--muted);margin-bottom:16px}
-/* Mobile: tap icon giỏ để bật popup (tap nữa hoặc nút "Xem giỏ" thì sang trang). */
+/* Nút × — ẩn trên desktop, hiện trên popup mobile */
+.cart-pop-close{display:none;width:28px;height:28px;border:none;background:transparent;font-size:24px;line-height:1;color:var(--ink);cursor:pointer;border-radius:50%;align-items:center;justify-content:center;flex-shrink:0;padding:0}
+.cart-pop-close:hover{background:var(--bg-soft)}
+.cart-pop-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+
+/* Mobile: ẩn mặc định, hiện khi .cart-menu.open (tap icon giỏ) — giống hover desktop */
 @media(max-width:880px){
   .cart-pop{display:none}
+  .cart-pop-close{display:flex}
   .cart-menu.open .cart-pop{display:block;opacity:1;visibility:visible;transform:translateY(0)}
 }
 
@@ -351,6 +357,12 @@ input,textarea,select{font-family:inherit}
 
 /* Hướng dẫn chọn size */
 .sg-modal{max-width:560px}
+/* Header dính khi cuộn (modal max-height 92vh có thể cắt nội dung trên mobile).
+   modal-close đã position:absolute → tự nổi sẵn phía trên. */
+.sg-modal .modal-title{position:sticky;top:-30px;margin:-30px -30px 14px;padding:24px 30px 14px;background:#fff;border-bottom:1px solid var(--line);z-index:3}
+@media(max-width:560px){
+  .sg-modal .modal-title{top:-22px;margin:-22px -22px 14px;padding:18px 22px 12px}
+}
 .sg-tablewrap{margin-bottom:18px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .sg-table{width:100%;border-collapse:collapse;font-size:13.5px;table-layout:fixed}
 .sg-table th,.sg-table td{padding:9px 6px;text-align:center;border-bottom:1px solid var(--line)}
@@ -485,6 +497,11 @@ input,textarea,select{font-family:inherit}
   .filter-backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:125;opacity:0;visibility:hidden;transition:opacity .25s ease,visibility .25s ease}
   .filter-backdrop.show{opacity:1;visibility:visible}
   .filter-toggle{display:inline-flex}
+  /* Mobile toolbar: lọc | đếm | sắp xếp trên cùng 1 hàng (grid) thay vì wrap lung tung */
+  .shop-toolbar{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;flex-wrap:nowrap;padding-bottom:12px}
+  .shop-toolbar .filter-toggle{justify-self:start;padding:7px 14px !important;font-size:13px;border-radius:24px}
+  .shop-toolbar .count{justify-self:center;text-align:center;font-size:12px;white-space:nowrap}
+  .shop-toolbar select{justify-self:end;padding:7px 28px 7px 12px;font-size:12.5px;min-width:auto;max-width:140px;background-position:right 8px center}
   .scroll-btn{display:none}
   .row .card{flex:0 0 200px}
   .hero{min-height:min(64vh,560px);padding:70px 0 60px}
@@ -529,7 +546,7 @@ input,textarea,select{font-family:inherit}
 /* Modal checkout */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;visibility:hidden;transition:opacity .22s ease,visibility .22s ease;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
 .modal-overlay.show{opacity:1;visibility:visible}
-.modal{background:#fff;border-radius:18px;max-width:460px;width:100%;padding:30px;position:relative;max-height:92vh;overflow-y:auto;transform:translateY(16px) scale(.98);transition:transform .26s cubic-bezier(.2,.8,.2,1);box-shadow:var(--shadow-lg)}
+.modal{background:#fff;border-radius:18px;max-width:460px;width:100%;padding:30px;position:relative;max-height:92vh;overflow-y:auto;overscroll-behavior:contain;transform:translateY(16px) scale(.98);transition:transform .26s cubic-bezier(.2,.8,.2,1);box-shadow:var(--shadow-lg)}
 .modal-overlay.show .modal{transform:translateY(0) scale(1)}
 .modal-close{position:absolute;top:14px;right:16px;font-size:26px;color:var(--muted);line-height:1;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:50%;transition:.15s;background:none;border:none;cursor:pointer}
 .modal-close:hover{background:var(--bg-soft);color:var(--ink)}

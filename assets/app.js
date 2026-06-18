@@ -279,9 +279,9 @@ function openLoginModal(){
   ov.innerHTML=`<div class="modal" style="max-width:400px">
     <button class="modal-close" id="lmClose" aria-label="Đóng">×</button>
     <h3 class="modal-title" style="text-align:center">Đăng nhập</h3>
-    <p class="muted" style="font-size:13.5px;text-align:center;margin-bottom:20px">Đăng nhập để lưu lịch sử đơn hàng và theo dõi giao hàng trên mọi thiết bị.</p>
+    <p class="muted" style="font-size:13.5px;text-align:center;margin-bottom:20px">Đăng nhập để lưu lịch sử đơn hàng và theo dõi giao hàng dễ dàng.</p>
     <button class="gbtn" id="gLoginBtn">${gsvg}Đăng nhập bằng Google</button>
-    <p class="muted" style="font-size:12px;text-align:center;margin-top:14px">Bạn vẫn có thể đặt hàng không cần đăng nhập.</p>
+    <p class="muted" style="font-size:12px;text-align:center;margin-top:14px">Vẫn có thể đặt hàng mà không cần đăng nhập.</p>
   </div>`;
   document.body.appendChild(ov);
   requestAnimationFrame(()=>ov.classList.add("show"));
@@ -534,24 +534,23 @@ function renderHeader(){
   renderAuthSlot();
   // Làm mới mini-cart mỗi lần rê chuột vào (đề phòng giỏ thay đổi ở tab khác)
   const cm=$("#cartMenu"); if(cm) cm.addEventListener("mouseenter", renderCartPop);
-  // Mobile (≤880px, khớp CSS hover-popup): tap icon giỏ → mở popup giống desktop hover;
-  // tap nữa hoặc nút "Xem giỏ" → sang trang giỏ.
+  // Mobile (≤880px): tap icon giỏ → mở popup giống desktop hover. Tap nữa hoặc nút
+  // "Xem giỏ" trong popup → sang trang giỏ. Tap ra ngoài → đóng popup.
   const cartLink = $(".cart-link");
   const isMobileCart = ()=> window.matchMedia("(max-width:880px)").matches;
   if(cm && cartLink){
     cartLink.addEventListener("click", e=>{
-      if(!isMobileCart()) return;   // desktop: link navigate như cũ (hover đã lo)
-      if(!cm.classList.contains("open")){
-        e.preventDefault();
-        renderCartPop();
-        cm.classList.add("open");
-      }
+      if(!isMobileCart()) return;
+      if(!cm.classList.contains("open")){ e.preventDefault(); renderCartPop(); cm.classList.add("open"); }
     });
-    // Tap ngoài menu → đóng popup
-    document.addEventListener("click", e=>{
+    // Tap/scroll/touch ngoài popup → đóng
+    const closeIfOutside = (e)=>{
       if(!cm.classList.contains("open")) return;
       if(!e.target.closest("#cartMenu")) cm.classList.remove("open");
-    });
+    };
+    document.addEventListener("click", closeIfOutside);
+    document.addEventListener("wheel", closeIfOutside, {passive:true});
+    document.addEventListener("touchmove", closeIfOutside, {passive:true});
   }
   const sb=$("#searchBtnHeader"); if(sb) sb.onclick = openSearchModal;
 }
@@ -606,12 +605,17 @@ function openSearchModal(){
 function renderCartPop(){
   const pop = $("#cartPop");
   if(!pop) return;
+  // Nút × chỉ hiện trên mobile (CSS .cart-pop-close ẩn trên desktop)
+  const closeBtn = `<button type="button" class="cart-pop-close" id="cartPopCloseBtn" aria-label="Đóng">×</button>`;
   if(!Cart.items.length){
-    pop.innerHTML = `<div class="cart-pop-inner"><div class="cart-pop-empty">
-      <div class="ic">🛍️</div>
-      <p>Giỏ hàng đang trống</p>
-      <a class="btn btn-dark btn-block" href="collection.html">Mua sắm ngay</a>
-    </div></div>`;
+    pop.innerHTML = `<div class="cart-pop-inner">
+      <div class="cart-pop-head"><span>Giỏ hàng</span>${closeBtn}</div>
+      <div class="cart-pop-empty">
+        <div class="ic">🛍️</div>
+        <p>Giỏ hàng đang trống</p>
+        <a class="btn btn-dark btn-block" href="collection.html">Mua sắm ngay</a>
+      </div></div>`;
+    bindCartPopClose();
     return;
   }
   const sub = Cart.subtotal();
@@ -631,7 +635,7 @@ function renderCartPop(){
     </div>`;
   }).join("");
   pop.innerHTML = `<div class="cart-pop-inner">
-    <div class="cart-pop-head">Giỏ hàng (${Cart.count()})</div>
+    <div class="cart-pop-head"><span>Giỏ hàng (${Cart.count()})</span>${closeBtn}</div>
     <div class="cart-pop-list">${rows}</div>
     <div class="cart-pop-foot">
       <div class="cart-pop-sub"><span>Tạm tính</span><span>${money(sub)}</span></div>
@@ -642,6 +646,12 @@ function renderCartPop(){
     e.preventDefault(); e.stopPropagation();
     Cart.remove(+b.dataset.cprm);   // Cart.save() → updateCartCount() → renderCartPop()
   });
+  bindCartPopClose();
+}
+function bindCartPopClose(){
+  const btn = $("#cartPopCloseBtn");
+  if(!btn) return;
+  btn.onclick = ()=>{ const cm=$("#cartMenu"); if(cm) cm.classList.remove("open"); };
 }
 
 function renderFooter(){
