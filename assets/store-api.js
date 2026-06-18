@@ -225,17 +225,36 @@
     /* ============ ĐƠN HÀNG ============ */
     async createOrder(o){
       const code = genCode();
-      const user = await this.getUser();
+      // Chỉ gắn user_id khi Supabase XÁC NHẬN session còn sống. Nếu localStorage
+      // còn JWT cũ nhưng auth server không nhận, getUser() trả lỗi → ta coi như guest.
+      let validUserId = null;
+      if(this.cloud){
+        try{
+          const r = await supa.auth.getUser();
+          if(!r.error && r.data?.user?.id) validUserId = r.data.user.id;
+          else if(r.error) console.warn("[Order] session không hợp lệ:", r.error.message);
+        }catch(e){ console.warn("[Order] auth.getUser threw:", e); }
+      } else {
+        const u = await this.getUser(); validUserId = u?.id || null;
+      }
       const row = { code, status:"pending", customer_name:o.customer_name, phone:o.phone,
         email:(o.email||"").trim().toLowerCase()||null,
         address:o.address, note:o.note||"", items:o.items, subtotal:o.subtotal,
-        shipping:o.shipping, total:o.total, user_id: user?.id || null };
+        shipping:o.shipping, total:o.total };
+      if(validUserId) row.user_id = validUserId;  // không gắn nếu null → tránh xung đột default
+      console.info("[Order] inserting:", {code, user_id: validUserId, mode: this.cloud?"cloud":"local"});
       if(this.cloud){
         let {data,error}=await supa.from("orders").insert(row).select().single();
-        // Fallback: nếu chưa chạy migration thêm cột email, vẫn cho đặt đơn
+        // Fallback 1: chưa chạy migration thêm cột email → insert lại không có email
         if(error && /column.*email/i.test(error.message||"")){
           const {email, ...rest}=row;
           ({data,error}=await supa.from("orders").insert(rest).select().single());
+        }
+        // Fallback 2: RLS reject vì session lệch → bỏ user_id, đặt như guest
+        if(error && /row-level security|violates.*policy/i.test(error.message||"") && row.user_id){
+          console.warn("[Order] RLS reject với user_id, thử lại như guest (không gắn user_id)");
+          const {user_id, ...guestRow}=row;
+          ({data,error}=await supa.from("orders").insert(guestRow).select().single());
         }
         if(error) throw error;
         await this.adjustStock(o.items,-1);
