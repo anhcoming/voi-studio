@@ -145,11 +145,15 @@
         // Fallback nếu DB chưa có 1 số column mới (migration chưa chạy)
         // Loại bỏ tuần tự từng column missing đến khi insert thành công.
         let attempt = { ...row };
-        for(const col of ["color_images","images","sold","likes"]){
-          if(error && new RegExp(`column.*${col}`,"i").test(error.message||"")){
-            delete attempt[col];
-            ({data,error} = await supa.from("products").upsert(attempt).select().single());
-          }
+        // Match cụ thể từng column thay vì loop mù: nếu err báo column khác, nhảy qua.
+        const COLS_TO_TRY = ["color_images","images","sold","likes"];
+        let guard = 0;
+        while(error && guard++ < COLS_TO_TRY.length){
+          const msg = (error.message||"");
+          const hit = COLS_TO_TRY.find(c=> new RegExp(`column[^a-z_]*"?${c}"?`,"i").test(msg) && (c in attempt));
+          if(!hit) break;   // err không phải missing column → dừng, không loop mù
+          delete attempt[hit];
+          ({data,error} = await supa.from("products").upsert(attempt).select().single());
         }
         if(error) throw error; return mapProduct(data);
       }
@@ -308,9 +312,16 @@
     async adjustStock(items, dir){
       try{
         if(this.cloud){
-          for(const it of items){
-            const {data}=await supa.from("products").select("stock").eq("id",it.id).maybeSingle();
-            if(data) await supa.from("products").update({stock:Math.max(0,(data.stock||0)+dir*it.qty)}).eq("id",it.id);
+          // RPC atomic: tránh race khi 2 khách cùng mua tồn cuối (xem migration-stock-rpc.sql)
+          const payload = (items||[]).map(it=>({id:it.id, qty:+it.qty||0}));
+          const {error} = await supa.rpc("apply_stock_delta",{items:payload, dir});
+          if(error){
+            // Fallback (chưa chạy migration): read-modify-write từng SP. KHÔNG atomic.
+            console.warn("apply_stock_delta missing → fallback (race-prone):", error.message);
+            for(const it of items){
+              const {data}=await supa.from("products").select("stock").eq("id",it.id).maybeSingle();
+              if(data) await supa.from("products").update({stock:Math.max(0,(data.stock||0)+dir*it.qty)}).eq("id",it.id);
+            }
           }
         } else {
           const arr=read(LS.products,[]);
@@ -321,9 +332,40 @@
     },
 
     /* ============ ĐĂNG NHẬP ADMIN ============ */
-    isAdmin(user){ return !!user && (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase()).includes((user.email||"").toLowerCase()); },
+    // Danh sách admin: đọc từ bảng admin_emails (1 nguồn duy nhất).
+    // CONFIG.ADMIN_EMAILS chỉ dùng làm fallback nếu bảng/RPC chưa có.
+    _adminEmails: null,
+    async _loadAdminEmails(){
+      if(this._adminEmails) return this._adminEmails;
+      const fallback = (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase());
+      if(!this.cloud){ this._adminEmails = fallback; return this._adminEmails; }
+      try{
+        const {data, error} = await supa.rpc("list_admin_emails");
+        if(error || !data || !data.length){ this._adminEmails = fallback; }
+        else this._adminEmails = data.map(e=> (typeof e==="string"?e:e.email||"").toLowerCase()).filter(Boolean);
+      }catch(e){ this._adminEmails = fallback; }
+      return this._adminEmails;
+    },
+    async isAdminAsync(user){
+      if(!user) return false;
+      const list = await this._loadAdminEmails();
+      return list.includes((user.email||"").toLowerCase());
+    },
+    // Sync wrapper giữ tương thích: dùng cache nếu có, fallback CONFIG.
+    isAdmin(user){
+      if(!user) return false;
+      const list = this._adminEmails || (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase());
+      return list.includes((user.email||"").toLowerCase());
+    },
     async getUser(){
-      if(this.cloud){ const {data}=await supa.auth.getUser(); return data.user||null; }
+      if(this.cloud){
+        // getSession() đảm bảo SDK đã parse xong token từ URL hash (OAuth callback)
+        // trước khi đọc user. Nếu chỉ gọi getUser() khi callback chưa xử lý xong,
+        // ta sẽ thấy null và khách bị coi như chưa đăng nhập tới khi onAuthStateChange bắn.
+        try{ await supa.auth.getSession(); }catch(e){}
+        const {data}=await supa.auth.getUser();
+        return data.user||null;
+      }
       return read(LS.admin, null);
     },
     onAuth(cb){

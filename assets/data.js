@@ -214,6 +214,14 @@ function productSVG(prod, opts={}){
 }
 
 function escapeXML(s){return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+/* safeColor: chỉ chấp nhận hex (#RGB / #RRGGBB / #RRGGBBAA) hoặc CSS named-color đơn giản.
+   Mọi giá trị khác → trả về "#ccc" để chặn CSS injection qua style="background:${color}". */
+function safeColor(c){
+  c = (c==null?"":String(c)).trim();
+  if(/^#[0-9a-f]{3,8}$/i.test(c)) return c;
+  if(/^[a-z]{3,20}$/i.test(c)) return c;       // named-color đơn giản, không có dấu ; () "
+  return "#ccc";
+}
 
 /* ---------- TRUY VẤN ---------- */
 function getProduct(id){ return PRODUCTS.find(p=>p.id===id); }
@@ -221,4 +229,4 @@ function byCategory(key){ return PRODUCTS.filter(p=>p.catKey===key); }
 function byCollection(name){ return PRODUCTS.filter(p=>p.collection===name); }
 
 window.STORE = { BRAND, CATEGORIES, COLLECTIONS, C, PRODUCTS,
-  formatVND, discountPct, productSVG, getProduct, byCategory, byCollection, slugify };
+  formatVND, discountPct, productSVG, getProduct, byCategory, byCollection, slugify, safeColor };

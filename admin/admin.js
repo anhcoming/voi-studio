@@ -6,6 +6,7 @@ const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
 const S = window.STORE;
 const money = S.formatVND;
 const esc = (s)=>(s||"").toString().replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// safeColor() được khai báo global trong data.js — không redeclare ở đây.
 
 const STATUS = {pending:"Chờ xác nhận",confirmed:"Đã xác nhận",shipping:"Đang giao",completed:"Hoàn thành",cancelled:"Đã huỷ"};
 const STATUS_COLOR = {pending:"#d8a441",confirmed:"#378add",shipping:"#7a5cff",completed:"#1d9e75",cancelled:"#e02424"};
@@ -33,7 +34,10 @@ function toast(msg){
 /* ---------------- BOOT / AUTH ---------------- */
 async function boot(){
   A.user = await DB.getUser();
-  if(!A.user || !DB.isAdmin(A.user)){ renderLogin(A.user); return; }
+  // Load danh sách admin từ DB (1 nguồn) trước khi quyết định cho vào
+  if(DB._loadAdminEmails) await DB._loadAdminEmails();
+  const allowed = DB.isAdminAsync ? await DB.isAdminAsync(A.user) : DB.isAdmin(A.user);
+  if(!A.user || !allowed){ renderLogin(A.user); return; }
   await loadCats();
   renderShell();
   switchTab(A.tab);
@@ -65,7 +69,12 @@ function renderLogin(user){
     try{ await DB.signInPassword(pf.email.value, pf.password.value); boot(); }
     catch(err){ b.disabled=false; b.textContent="Đăng nhập"; toast("Đăng nhập thất bại: "+(err.message||err)); }
   };
-  const lb=$("#loginBtn"); if(lb) lb.onclick=async()=>{ try{ await DB.signInGoogle({asAdmin:true}); if(!DB.cloud) boot(); }catch(e){ toast("Lỗi Google: "+(e.message||e)); } };
+  const lb=$("#loginBtn"); if(lb) lb.onclick=async()=>{
+    if(lb.disabled) return;
+    lb.disabled=true; const prevText=lb.textContent; lb.textContent="Đang mở Google…";
+    try{ await DB.signInGoogle({asAdmin:true}); if(!DB.cloud) boot(); }
+    catch(e){ toast("Lỗi Google: "+(e.message||e)); lb.disabled=false; lb.textContent=prevText; }
+  };
   const ob=$("#logoutBtn"); if(ob) ob.onclick=async()=>{ await DB.signOut(); boot(); };
 }
 
@@ -224,7 +233,7 @@ async function renderOrders(filter=""){
 function orderModal(o){
   const items=(o.items||[]).map(it=>`<div class="cart-item" style="grid-template-columns:1fr auto">
     <div><h4 style="font-size:14px">${esc(it.name)}</h4>
-      <div class="ci-meta">Màu <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${it.color};border:1px solid #ccc;vertical-align:middle"></span> · Size ${esc(it.size)} · SL ${it.qty}</div></div>
+      <div class="ci-meta">Màu <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${safeColor(it.color)};border:1px solid #ccc;vertical-align:middle"></span> · Size ${esc(it.size)} · SL ${it.qty}</div></div>
     <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div></div>`).join("");
   openModal(`<h3 class="modal-title">Đơn ${esc(o.code)}</h3>
     <p style="font-size:14px;line-height:1.8;margin-bottom:14px">
@@ -401,11 +410,29 @@ function openModal(html, cls=""){
   const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="adminModal";
   ov.innerHTML=`<div class="modal ${cls}"><button class="modal-close" id="mClose">×</button>${html}</div>`;
   document.body.appendChild(ov); requestAnimationFrame(()=>ov.classList.add("show"));
+  document.body.style.overflow="hidden";
   $("#mClose").onclick=closeModal; ov.addEventListener("click",e=>{ if(e.target===ov) closeModal(); });
 }
-function closeModal(){ const m=$("#adminModal"); if(m){ m.classList.remove("show"); setTimeout(()=>m.remove(),180); } }
+function closeModal(){ const m=$("#adminModal"); if(m){ m.classList.remove("show"); setTimeout(()=>m.remove(),180); } document.body.style.overflow=""; }
+// Escape đóng modal admin (form sửa SP, danh mục, đơn…)
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && $("#adminModal")) closeModal(); });
 
 /* ---------------- START ---------------- */
 document.addEventListener("DOMContentLoaded", ()=>{
-  if(DB.cloud) DB.onAuth(()=>boot()); else boot();
+  // Guard: chỉ đăng ký auth-listener 1 lần. DB.onAuth (Supabase) firing nhiều lần
+  // (token refresh, INITIAL_SESSION) sẽ kéo theo boot() lặp lại — và boot() ghi đè
+  // document.body làm mọi listener trong tab cũ vẫn còn nhưng trỏ vào DOM mới.
+  if(window.__adminAuthBound) return;
+  window.__adminAuthBound = true;
+  let lastUserId = null;
+  if(DB.cloud){
+    DB.onAuth((u)=>{
+      const uid = u?.id || null;
+      if(uid === lastUserId) return;   // bỏ qua event không đổi user (token refresh)
+      lastUserId = uid;
+      boot();
+    });
+  } else {
+    boot();
+  }
 });
