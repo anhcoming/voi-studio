@@ -57,6 +57,28 @@ const Email = {
       return `• ${it.name}${opts?` (${opts})`:""} × ${it.qty} — ${money(it.price*it.qty)}`;
     }).join("\n");
   },
+  esc(s){ return (s||"").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); },
+  // Định dạng HTML có ảnh — dùng cho template email rich. Trong EmailJS template
+  // dùng triple braces {{{order_items_html}}} để insert raw HTML (không escape).
+  formatItemsHtml(items){
+    const rows=(items||[]).map(it=>{
+      const opts=[it.color?`Màu ${this.esc(it.color)}`:"", it.size?`Size ${this.esc(it.size)}`:""].filter(Boolean).join(" · ");
+      const img=it.image
+        ? `<img src="${this.esc(it.image)}" width="64" height="64" alt="" style="display:block;border-radius:6px;object-fit:cover;border:1px solid #eee">`
+        : `<div style="width:64px;height:64px;background:#f4f4f4;border-radius:6px;border:1px solid #eee"></div>`;
+      return `<tr>
+        <td width="72" style="padding:12px 12px 12px 0;border-bottom:1px solid #eee;vertical-align:top">${img}</td>
+        <td style="padding:12px 0;border-bottom:1px solid #eee;vertical-align:top">
+          <div style="font-size:14px;font-weight:600;color:#1d1d1d">${this.esc(it.name)}</div>
+          <div style="font-size:12px;color:#666;margin-top:4px">${opts}${opts?" · ":""}SL ${it.qty}</div>
+        </td>
+        <td style="padding:12px 0;border-bottom:1px solid #eee;text-align:right;vertical-align:top;font-size:14px;font-weight:600;color:#1d1d1d;white-space:nowrap">
+          ${money(it.price*it.qty)}
+        </td>
+      </tr>`;
+    }).join("");
+    return `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;font-family:Arial,sans-serif">${rows}</table>`;
+  },
   async sendConfirmation(order){
     if(!this.enabled){
       const probs=this.diagnose();
@@ -76,6 +98,7 @@ const Email = {
       order_subtotal: money(order.subtotal||0),
       order_shipping: order.shipping ? money(order.shipping) : "Miễn phí",
       order_items: this.formatItems(order.items),
+      order_items_html: this.formatItemsHtml(order.items),
       order_address: order.address || "",
       order_phone: order.phone || "",
       order_note: order.note || "",
