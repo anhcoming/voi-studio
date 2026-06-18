@@ -36,10 +36,19 @@ const Email = {
   inited: false,
   get cfg(){ const c=window.CONFIG||{}; return {pk:c.EMAILJS_PUBLIC_KEY||"", svc:c.EMAILJS_SERVICE_ID||"", tpl:c.EMAILJS_TEMPLATE_ID||""}; },
   get enabled(){ const {pk,svc,tpl}=this.cfg; return !!(pk&&svc&&tpl&&window.emailjs); },
+  diagnose(){
+    const c=this.cfg;
+    const probs=[];
+    if(!window.emailjs) probs.push("EmailJS SDK chưa load (kiểm tra <script @emailjs/browser> trong cart.html, hoặc adblock chặn CDN, hoặc đang chạy file://)");
+    if(!c.pk)  probs.push("Thiếu EMAILJS_PUBLIC_KEY trong assets/config.js");
+    if(!c.svc) probs.push("Thiếu EMAILJS_SERVICE_ID trong assets/config.js");
+    if(!c.tpl) probs.push("Thiếu EMAILJS_TEMPLATE_ID trong assets/config.js");
+    return probs;
+  },
   init(){
     if(this.inited || !this.enabled) return;
-    try{ window.emailjs.init({publicKey:this.cfg.pk}); this.inited=true; }
-    catch(e){ console.warn("EmailJS init",e); }
+    try{ window.emailjs.init({publicKey:this.cfg.pk}); this.inited=true; console.info("[Email] init OK"); }
+    catch(e){ console.warn("[Email] init fail",e); }
   },
   // Định dạng item dạng text dễ đọc trong email (template plain-text vẫn xài được)
   formatItems(items){
@@ -49,9 +58,15 @@ const Email = {
     }).join("\n");
   },
   async sendConfirmation(order){
-    if(!this.enabled) return {sent:false, reason:"disabled"};
-    const to=(order.email||"").trim(); if(!to) return {sent:false, reason:"no-email"};
+    if(!this.enabled){
+      const probs=this.diagnose();
+      console.warn("[Email] SKIP send — tính năng đang TẮT. Lý do:\n - "+probs.join("\n - "));
+      return {sent:false, reason:"disabled", probs};
+    }
+    const to=(order.email||"").trim();
+    if(!to){ console.warn("[Email] SKIP send — đơn không có email người mua"); return {sent:false, reason:"no-email"}; }
     this.init();
+    console.info("[Email] sending to", to, "via service", this.cfg.svc, "template", this.cfg.tpl);
     const trackingUrl = `${location.origin}${location.pathname.replace(/[^/]+$/,"")}order.html?code=${encodeURIComponent(order.code)}`;
     const params = {
       to_email: to,
@@ -68,10 +83,12 @@ const Email = {
       store_name: (window.CONFIG&&window.CONFIG.STORE_NAME) || (S.BRAND&&S.BRAND.name) || "Shop",
     };
     try{
-      await window.emailjs.send(this.cfg.svc, this.cfg.tpl, params);
-      return {sent:true};
+      const res=await window.emailjs.send(this.cfg.svc, this.cfg.tpl, params);
+      console.info("[Email] sent OK", res);
+      return {sent:true, res};
     }catch(e){
-      console.warn("EmailJS send fail",e);
+      console.warn("[Email] send FAIL — chi tiết:", e);
+      console.warn("[Email] payload đã gửi:", params);
       return {sent:false, reason:"error", error:e};
     }
   },
