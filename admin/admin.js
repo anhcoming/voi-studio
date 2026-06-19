@@ -1015,10 +1015,29 @@ async function renderOrders(filter=""){
 }
 
 function orderModal(o){
-  const items=(o.items||[]).map(it=>`<div class="cart-item" style="grid-template-columns:1fr auto">
-    <div><h4 style="font-size:14px">${esc(it.name)}</h4>
-      <div class="ci-meta">Màu <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${safeColor(it.color)};border:1px solid #ccc;vertical-align:middle"></span> · Size ${esc(it.size)} · SL ${it.qty}</div></div>
-    <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div></div>`).join("");
+  // Resolve ảnh: ưu tiên snapshot lưu trong đơn (it.image), fallback từ product hiện tại,
+  // cuối cùng SVG mockup. Tên màu lookup từ S.COLORS.
+  const itemImage = (it)=>{
+    if(it.image) return `<img src="${esc(it.image)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">`;
+    const p = (S.PRODUCTS||[]).find(x=>x.id===it.id);
+    if(p && p.image_url) return `<img src="${esc(p.image_url)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover">`;
+    if(p) return S.productSVG(p,{color:it.color});
+    return S.productSVG({type:"tee",print:it.name||"",collection:"",colors:[it.color||"#ccc"],name:it.name||""},{color:it.color});
+  };
+  const items=(o.items||[]).map(it=>{
+    const colorName = (S.colorName && it.color) ? S.colorName(it.color) : (it.color||"");
+    return `<div style="display:grid;grid-template-columns:56px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)">
+    <div style="width:56px;aspect-ratio:1;border-radius:8px;overflow:hidden;background:var(--bg-soft)">${itemImage(it)}</div>
+    <div style="min-width:0">
+      <h4 style="font-size:14px;font-weight:600;margin-bottom:4px;line-height:1.35">${esc(it.name)}</h4>
+      <div class="ci-meta" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        ${it.color?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${safeColor(it.color)};border:1px solid #ccc"></span>${esc(colorName)}</span> · `:""}
+        Size ${esc(it.size||"")} · SL ${it.qty}
+      </div>
+    </div>
+    <div style="text-align:right;font-weight:700;white-space:nowrap">${money(it.price*it.qty)}</div>
+  </div>`;
+  }).join("");
   openModal(`<h3 class="modal-title">Đơn ${esc(o.code)}</h3>
     <p style="font-size:14px;line-height:1.8;margin-bottom:14px">
       <b>${esc(o.customer_name||"")}</b> · ${esc(o.phone||"")}${o.email?` · <a href="mailto:${esc(o.email)}">${esc(o.email)}</a>`:""}<br>${esc(o.address||"")}
@@ -1291,6 +1310,11 @@ function openModal(html, cls=""){
   ov.innerHTML=`<div class="modal ${cls}"><button class="modal-close" id="mClose">×</button>${html}</div>`;
   document.body.appendChild(ov); requestAnimationFrame(()=>ov.classList.add("show"));
   document.body.style.overflow="hidden";
+  // Di chuyển close vào title (cuối) để flex-align center chuẩn
+  const mod = ov.querySelector(".modal");
+  const close = mod && mod.querySelector(":scope > .modal-close");
+  const title = mod && mod.querySelector(":scope > .modal-title");
+  if(close && title && !title.contains(close)) title.appendChild(close);
   $("#mClose").onclick=closeModal; ov.addEventListener("click",e=>{ if(e.target===ov) closeModal(); });
 }
 function closeModal(){ const m=$("#adminModal"); if(m){ m.classList.remove("show"); setTimeout(()=>m.remove(),180); } document.body.style.overflow=""; }

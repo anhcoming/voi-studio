@@ -253,6 +253,66 @@
       write(LS.colors, read(LS.colors,[]).filter(c=>c.key!==key));
     },
 
+    /* ============ ĐỊA CHỈ ĐÃ LƯU (user_addresses) ============ */
+    async listMyAddresses(){
+      const user = await this.getUser(); if(!user) return [];
+      if(this.cloud){
+        const {data,error}=await supa.from("user_addresses").select("*").eq("user_id",user.id).order("is_default",{ascending:false}).order("created_at",{ascending:false});
+        // Bảng chưa migrate (relation not exist) → trả mảng rỗng, không lỗi
+        if(error){
+          if(/relation.*user_addresses|user_addresses.*does not exist|42P01/i.test(error.message||"")){
+            return [];
+          }
+          console.warn("listMyAddresses",error.message); return [];
+        }
+        return data||[];
+      }
+      const all = read("originals_user_addresses_v1",{});
+      return (all[user.id]||[]).slice().sort((a,b)=> (b.is_default?1:0)-(a.is_default?1:0));
+    },
+    async upsertAddress(addr){
+      const user = await this.getUser(); if(!user) throw new Error("Chưa đăng nhập");
+      const row = {
+        user_id:user.id,
+        label:addr.label||"Nhà",
+        recipient:addr.recipient||"", phone:addr.phone||"",
+        province_code:addr.province_code||null, province_name:addr.province_name||null,
+        district_code:addr.district_code||null, district_name:addr.district_name||null,
+        ward_code:addr.ward_code||null,         ward_name:addr.ward_name||null,
+        street:addr.street||"",
+        is_default:!!addr.is_default,
+      };
+      if(addr.id) row.id = addr.id;
+      if(this.cloud){
+        const {data,error}=await supa.from("user_addresses").upsert(row).select().single();
+        if(error) throw error; return data;
+      }
+      const all = read("originals_user_addresses_v1",{});
+      const list = all[user.id] || (all[user.id]=[]);
+      if(addr.id){
+        const i = list.findIndex(x=>x.id===addr.id);
+        if(i>=0) list[i] = {...list[i], ...row};
+      } else {
+        row.id = "addr-"+Date.now().toString(36);
+        row.created_at = new Date().toISOString();
+        // Nếu set default → bỏ default của các bản khác
+        if(row.is_default) list.forEach(x=>x.is_default=false);
+        list.push(row);
+      }
+      write("originals_user_addresses_v1", all);
+      return row;
+    },
+    async deleteAddress(id){
+      const user = await this.getUser(); if(!user) return;
+      if(this.cloud){
+        const {error}=await supa.from("user_addresses").delete().eq("id",id).eq("user_id",user.id);
+        if(error) throw error; return;
+      }
+      const all = read("originals_user_addresses_v1",{});
+      if(all[user.id]) all[user.id] = all[user.id].filter(x=>x.id!==id);
+      write("originals_user_addresses_v1", all);
+    },
+
     /* ============ SITE SETTINGS (key/value jsonb) ============ */
     async getSettings(key){
       if(this.cloud){
@@ -303,7 +363,12 @@
       const row = { code, status:"pending", customer_name:o.customer_name, phone:o.phone,
         email:(o.email||"").trim().toLowerCase()||null,
         address:o.address, note:o.note||"", items:o.items, subtotal:o.subtotal,
-        shipping:o.shipping, total:o.total };
+        shipping:o.shipping, total:o.total,
+        // Structured address (mới — cho shipping API/báo cáo). Fallback null nếu thiếu.
+        province_code:o.province_code||null, province_name:o.province_name||null,
+        district_code:o.district_code||null, district_name:o.district_name||null,
+        ward_code:o.ward_code||null,         ward_name:o.ward_name||null,
+        street:o.street||null };
       if(validUserId) row.user_id = validUserId;  // không gắn nếu null → tránh xung đột default
       console.info("[Order] inserting:", {code, user_id: validUserId, mode: this.cloud?"cloud":"local"});
       if(this.cloud){
@@ -311,9 +376,28 @@
         // vừa insert; với khách (anon) thì cả 2 policy SELECT (is_admin, user_id=auth.uid)
         // đều fail → 42501. Vì `code` đã tự sinh ở client nên không cần đọc lại.
         let {error}=await supa.from("orders").insert(row);
-        // Fallback 1: chưa chạy migration thêm cột email → insert lại không có email
-        if(error && /column.*email/i.test(error.message||"")){
+        // Fallback 1: chưa chạy migration thêm cột email → insert lại không có email.
+        // PostgREST message: "Could not find the 'X' column of 'Y'..."
+        const missingCol = (msg)=>{
+          if(!msg) return null;
+          // Bắt cả 2 dạng: "column 'X'" (Postgres) và "Could not find the 'X' column" (PostgREST)
+          const m1 = /column[^a-z_]*['"]?([a-z_]+)['"]?/i.exec(msg);
+          const m2 = /['"]([a-z_]+)['"]\s+column/i.exec(msg);
+          return (m1 && m1[1]) || (m2 && m2[1]) || null;
+        };
+        const isMissingCol = (msg, name)=>{
+          const m = missingCol(msg);
+          return m && m.toLowerCase()===name.toLowerCase();
+        };
+        if(error && isMissingCol(error.message, "email")){
           const {email, ...rest}=row;
+          ({error}=await supa.from("orders").insert(rest));
+        }
+        // Fallback 1b: chưa chạy migration structured address → drop các cột mới
+        const STRUCTURED_COLS = ["province_code","province_name","district_code","district_name","ward_code","ward_name","street"];
+        if(error && STRUCTURED_COLS.some(c=>isMissingCol(error.message, c))){
+          const rest = {...row};
+          STRUCTURED_COLS.forEach(c=> delete rest[c]);
           ({error}=await supa.from("orders").insert(rest));
         }
         // Fallback 2: RLS reject vì session lệch → bỏ user_id, đặt như guest

@@ -7,6 +7,11 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const money = S.formatVND;
 // safeColor() được khai báo global trong data.js (chặn CSS injection qua style="background:${c}")
 const param = (k) => new URLSearchParams(location.search).get(k);
+// debounce: trì hoãn fn cho tới khi user ngừng kích hoạt ms mili-giây — tránh
+// rebuild list mỗi keystroke (search modal, filter input).
+function debounce(fn, ms=300){
+  let t; return function(...a){ clearTimeout(t); t=setTimeout(()=>fn.apply(this,a), ms); };
+}
 
 /* trạng thái đơn hàng */
 const ORDER_STATUS = {
@@ -157,11 +162,24 @@ function updateCartCount(){ $$(".cart-count").forEach(e => e.textContent = Cart.
     const visible = document.querySelectorAll(".modal-overlay.show").length;
     document.body.style.overflow = visible ? "hidden" : "";
   };
-  // observer: tự lock/unlock khi class .show xuất hiện/biến mất trên modal-overlay
+  // Di chuyển .modal-close vào trong .modal-title (cuối) để flex-align chuẩn.
+  const fixCloseInTitle = (root)=>{
+    root.querySelectorAll(".modal").forEach(mod=>{
+      const close = mod.querySelector(":scope > .modal-close");
+      const title = mod.querySelector(":scope > .modal-title");
+      if(close && title && !title.contains(close)) title.appendChild(close);
+    });
+  };
   new MutationObserver(muts=>{
     for(const m of muts){
       if(m.type==="attributes" && m.target.classList?.contains("modal-overlay")) lockScroll();
-      if(m.type==="childList"){ for(const n of m.addedNodes){ if(n.classList?.contains("modal-overlay")) lockScroll(); } for(const n of m.removedNodes){ if(n.classList?.contains("modal-overlay")) lockScroll(); } }
+      if(m.type==="childList"){
+        for(const n of m.addedNodes){
+          if(n.nodeType!==1) continue;
+          if(n.classList?.contains("modal-overlay")){ lockScroll(); fixCloseInTitle(n); }
+        }
+        for(const n of m.removedNodes){ if(n.classList?.contains("modal-overlay")) lockScroll(); }
+      }
     }
   }).observe(document.body,{childList:true,subtree:false,attributes:true,attributeFilter:["class"],subtree:true});
   document.addEventListener("keydown", e=>{
@@ -193,6 +211,8 @@ const Auth = {
   ready: false,
   async init(){
     try{ this.user = await DB.getUser(); }catch(e){ this.user = null; }
+    // Preload danh sách admin để DB.isAdmin() chính xác khi render auth slot
+    try{ if(DB._loadAdminEmails) await DB._loadAdminEmails(); }catch(e){}
     this.ready = true;
     // Lắng nghe state change từ Supabase (cloud) — đăng nhập/đăng xuất ở tab khác
     if(DB.cloud){
@@ -240,17 +260,19 @@ function renderAuthSlot(){
     $("#loginBtnHeader").onclick = openLoginModal;
     return;
   }
+  const isAdmin = DB.isAdmin ? DB.isAdmin(Auth.user) : false;
   slot.innerHTML = `
     <div class="user-menu" id="userMenu">
       <button class="icon-btn" id="userBtnHeader" aria-label="Tài khoản" title="${escapeXML(Auth.displayName())}">
-        <span class="ua-circle">${escapeXML(Auth.initial())}</span>
+        <span class="ua-circle${isAdmin?' is-admin':''}">${escapeXML(Auth.initial())}</span>
       </button>
       <div class="user-dd" id="userDD" hidden>
         <div class="ud-head">
-          <div class="ud-name">${escapeXML(Auth.displayName())}</div>
+          <div class="ud-name">${escapeXML(Auth.displayName())}${isAdmin?` <span class="ud-badge">ADMIN</span>`:""}</div>
           <div class="ud-email">${escapeXML(Auth.email())}</div>
         </div>
         <a href="order.html" class="ud-item">Đơn của tôi</a>
+        ${isAdmin?`<a href="admin/" class="ud-item ud-admin">⚙ Trang quản trị</a>`:""}
         <button class="ud-item danger" id="signOutBtnHeader" type="button">Đăng xuất</button>
       </div>
     </div>`;
@@ -296,14 +318,14 @@ function openLoginModal(){
 
 /* ---------------- CARD SẢN PHẨM ---------------- */
 function productImage(p, opts){
-  if(p.image_url) return `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy">`;
+  if(p.image_url) return `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy" decoding="async">`;
   return S.productSVG(p, opts||{seed:hashSeed(p.id)});
 }
 /* Ảnh của 1 dòng trong đơn hàng — ưu tiên ảnh đã lưu vào đơn lúc đặt (snapshot),
    sau đó mới tra sản phẩm hiện tại, cuối cùng fallback SVG. Nhờ vậy đơn vẫn
    hiển thị đúng ảnh kể cả khi sản phẩm bị ẩn / xoá / đổi sau này. */
 function orderItemImage(it){
-  if(it.image) return `<img class="thumb-img" src="${it.image}" alt="${escapeXML(it.name||"")}" loading="lazy">`;
+  if(it.image) return `<img class="thumb-img" src="${it.image}" alt="${escapeXML(it.name||"")}" loading="lazy" decoding="async">`;
   const pr = S.getProduct(it.id);
   if(pr) return productImage(pr,{color:it.color});
   return S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color});
@@ -329,9 +351,9 @@ function productCard(p){
     ? S.productSVG(p,{seed:hashSeed(p.id)}) + `<div class="hoverimg">${S.productSVG(p,{color:p.colors[1]||p.colors[0],seed:hashSeed(p.id)+1})}</div>`
     : S.productSVG(p,{seed:hashSeed(p.id)});
   const media = (ci0 && ci0[0])
-    ? `<img class="thumb-img" src="${ci0[0]}" alt="${escapeXML(p.name)}" loading="lazy">`
+    ? `<img class="thumb-img" src="${ci0[0]}" alt="${escapeXML(p.name)}" loading="lazy" decoding="async">`
     : (p.image_url
-      ? `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy">`
+      ? `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy" decoding="async">`
       : fallbackSvg);
   const sold=+p.sold||0, likes=+p.likes||0;
   const stats = (sold>0 || likes>0)
@@ -389,9 +411,9 @@ document.addEventListener("click", e=>{
   const ci = (p.color_images||{})[c];
   let html;
   if(ci && ci[0]){
-    html = `<img class="thumb-img" src="${ci[0]}" alt="${escapeXML(p.name)}" loading="lazy">`;
+    html = `<img class="thumb-img" src="${ci[0]}" alt="${escapeXML(p.name)}" loading="lazy" decoding="async">`;
   } else if(p.image_url && c===p.colors[0]){
-    html = `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy">`;
+    html = `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" loading="lazy" decoding="async">`;
   } else {
     html = S.productSVG(p,{color:c,seed:hashSeed(p.id)});
     if(HAS_HOVER) html += `<div class="hoverimg">${S.productSVG(p,{back:true,color:c,seed:hashSeed(p.id)+1})}</div>`;
@@ -406,7 +428,7 @@ function openQuickAdd(p){
   let qaColor = p.colors[0];
   const sizes = p.sizes||[];
   const thumbHTML = ()=> p.image_url
-    ? `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}">`
+    ? `<img class="thumb-img" src="${p.image_url}" alt="${escapeXML(p.name)}" decoding="async">`
     : S.productSVG(p,{color:qaColor});
   const sizeRows = (typeof SIZE_CHART!=="undefined"?SIZE_CHART:[]).filter(s=>sizes.includes(s.size))
     .map(s=>`<tr><td><b>${s.size}</b></td><td>${s.hMin}–${s.hMax}</td><td>${s.wMin}–${s.wMax}</td></tr>`).join("");
@@ -581,7 +603,7 @@ function openSearchModal(){
     out.innerHTML = list.map(p=>{
       const ci0=(p.color_images||{})[p.colors[0]];
       const img = (ci0&&ci0[0]) ? ci0[0] : (p.image_url||"");
-      const thumb = img ? `<img src="${escapeXML(img)}" alt="" style="width:54px;height:64px;object-fit:cover;border-radius:8px;background:var(--bg-soft)">` : `<div style="width:54px;height:64px;border-radius:8px;background:var(--bg-soft)"></div>`;
+      const thumb = img ? `<img src="${escapeXML(img)}" alt="" loading="lazy" decoding="async" style="width:54px;height:64px;object-fit:cover;border-radius:8px;background:var(--bg-soft)">` : `<div style="width:54px;height:64px;border-radius:8px;background:var(--bg-soft)"></div>`;
       return `<a href="product.html?id=${encodeURIComponent(p.id)}" style="display:flex;gap:12px;padding:10px 6px;border-bottom:1px solid var(--line);color:inherit;text-decoration:none;align-items:center">
         ${thumb}
         <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">${escapeXML(p.name)}</div><div class="muted" style="font-size:12px">${escapeXML(p.collection||p.catName||"")}</div></div>
@@ -590,7 +612,8 @@ function openSearchModal(){
     }).join("");
   }
   draw("");
-  input.addEventListener("input", e=>draw(e.target.value));
+  const drawDebounced = debounce(draw, 200);
+  input.addEventListener("input", e=>drawDebounced(e.target.value));
   input.addEventListener("keydown", e=>{
     if(e.key==="Enter"){
       const q=input.value.trim(); if(!q) return;
@@ -689,10 +712,15 @@ function renderFooter(){
 }
 
 /* ---------------- TRANG CHỦ ---------------- */
+// Trả về cards thật nếu có; trả skeleton khi Catalog đang load (data từ API chưa về).
+function cardsOrSkeleton(products, n=6){
+  if(products && products.length) return products.map(productCard).join("");
+  return Catalog.loaded ? "" : Array.from({length:n}, skCard).join("");
+}
 function scrollerRow(products){
   return `<div class="scroller">
     <button class="scroll-btn prev">‹</button>
-    <div class="row">${products.map(productCard).join("")}</div>
+    <div class="row">${cardsOrSkeleton(products, 5)}</div>
     <button class="scroll-btn next">›</button>
   </div>`;
 }
@@ -826,7 +854,7 @@ function renderCollection(){
   root.innerHTML = `
   <div class="wrap page-head">
     <div class="crumb"><a href="index.html">Trang chủ</a> / ${title}</div>
-    <h1 class="page-title">${title}</h1>
+    <h1 class="page-title">${title} <span class="page-count" id="count"></span></h1>
   </div>
   <div class="filter-backdrop" id="fbackdrop"></div>
   <div class="wrap shop">
@@ -848,7 +876,6 @@ function renderCollection(){
     <div>
       <div class="shop-toolbar">
         <button class="btn btn-outline filter-toggle" id="ftoggle" style="padding:9px 18px">Lọc ▾</button>
-        <span class="count" id="count"></span>
         <select id="sort">
           <option value="featured">Nổi bật</option>
           <option value="price-asc">Giá: thấp → cao</option>
@@ -858,9 +885,23 @@ function renderCollection(){
         </select>
       </div>
       <div class="grid" id="grid"></div>
+      <div id="loadMoreWrap" style="display:none;text-align:center;margin:24px 0 8px"><button class="btn btn-outline" id="loadMoreBtn" type="button" style="padding:10px 28px">Xem thêm</button></div>
       <div id="empty" style="display:none;text-align:center;padding:70px 0;color:var(--muted)">Không có sản phẩm phù hợp bộ lọc.</div>
     </div>
   </div>`;
+
+  // Pagination: render dần 24 sp / lần thay vì xả hết list. Khi list dài
+  // (vd 100+ sp) giúp giảm DOM nodes và thời gian innerHTML lần đầu.
+  const PAGE_SIZE = 24;
+  let shown = 0;
+  let currentList = [];
+
+  function renderPage(){
+    const slice = currentList.slice(0, shown);
+    $("#grid").innerHTML = cardsOrSkeleton(slice, 8);
+    const wrap = $("#loadMoreWrap");
+    if(wrap) wrap.style.display = shown < currentList.length ? "block" : "none";
+  }
 
   function apply(){
     let list = S.PRODUCTS.slice();
@@ -881,10 +922,17 @@ function renderCollection(){
     if(state.sort==="price-desc") list.sort((a,b)=>b.price-a.price);
     if(state.sort==="discount") list.sort((a,b)=>S.discountPct(b.price,b.compare)-S.discountPct(a.price,a.compare));
     if(state.sort==="name") list.sort((a,b)=>a.name.localeCompare(b.name,"vi"));
-    $("#grid").innerHTML = list.map(productCard).join("");
-    $("#count").textContent = list.length + " sản phẩm";
-    $("#empty").style.display = list.length? "none":"block";
+    currentList = list;
+    shown = Math.min(PAGE_SIZE, list.length);
+    renderPage();
+    $("#count").textContent = Catalog.loaded ? `(${list.length})` : "";
+    $("#empty").style.display = (Catalog.loaded && !list.length) ? "block" : "none";
   }
+  const loadMoreBtn = $("#loadMoreBtn");
+  if(loadMoreBtn) loadMoreBtn.onclick = ()=>{
+    shown = Math.min(shown + PAGE_SIZE, currentList.length);
+    renderPage();
+  };
   $$('input[name=cat]').forEach(r=>r.onchange=e=>{state.cat=e.target.value;apply()});
   $$('input[name=col]').forEach(r=>r.onchange=()=>{state.cols=$$('input[name=col]:checked').map(x=>x.value);apply()});
   $$('input[name=price]').forEach(r=>r.onchange=e=>{state.price=e.target.value;apply()});
@@ -976,7 +1024,20 @@ async function renderProduct(){
   // Cache miss → fetch trực tiếp DB (tránh trường hợp PRODUCTS chưa load
   // hoặc id trong URL không khớp gì trong cache local)
   if(!p && id){
-    root.innerHTML = `<div class="wrap" style="padding:80px 0;text-align:center;color:var(--muted)">Đang tải sản phẩm…</div>`;
+    // Skeleton PDP layout — 2 cột: ảnh + info
+    root.innerHTML = `<div class="wrap" style="padding:24px 0">
+      <div class="sk-pdp">
+        <div class="sk sk-pdp-img"></div>
+        <div class="sk-pdp-info">
+          <span class="sk sk-line" style="width:120px;height:12px"></span>
+          <span class="sk sk-line" style="width:80%;height:30px"></span>
+          <span class="sk sk-line" style="width:140px;height:24px"></span>
+          ${Array.from({length:4}, _=>`<span class="sk sk-line" style="width:90%;height:11px"></span>`).join("")}
+          <div style="display:flex;gap:8px;margin-top:14px">${Array.from({length:4}, _=>`<span class="sk sk-block" style="width:48px;height:42px;border-radius:8px"></span>`).join("")}</div>
+          <span class="sk sk-line" style="width:100%;height:48px;border-radius:14px;margin-top:18px"></span>
+        </div>
+      </div>
+    </div>`;
     try{ p = await DB.getProduct(id); }catch(e){ console.warn("getProduct DB",e); }
   }
   if(!p){
@@ -991,15 +1052,15 @@ async function renderProduct(){
   const off = S.discountPct(p.price,p.compare);
   const soldOut = (p.stock!=null && p.stock<=0);
 
-  // Gallery theo MÀU: ảnh của màu đang chọn → ảnh chung → SVG fallback
+  // Gallery theo MÀU: ảnh của màu đang chọn → ảnh chung → SVG fallback.
+  // Ảnh đầu eager (above the fold) — phần sau lazy + decoding async.
+  const imgTag = (u,i)=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}"${i===0?' fetchpriority="high"':' loading="lazy" decoding="async"'}>`;
   function galleryFor(c){
     const ci = p.color_images || {};
     const own = (ci[c]||[]).filter(Boolean);
-    if(own.length) return own.map(u=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}">`);
+    if(own.length) return own.map(imgTag);
     const flat = Array.isArray(p.images)?p.images.filter(Boolean):[];
-    // Màu mặc định (đầu tiên) chưa gán ảnh riêng → dùng ảnh thật chung (đẹp hơn)
-    if(c===p.colors[0] && flat.length) return flat.map(u=>`<img class="thumb-img" src="${u}" alt="${escapeXML(p.name)}">`);
-    // Màu khác chưa có ảnh riêng → dựng mockup SVG đúng màu để bấm màu thấy đổi ngay
+    if(c===p.colors[0] && flat.length) return flat.map(imgTag);
     return [S.productSVG(p,{color:c}), S.productSVG(p,{back:true,color:c})];
   }
   let gallery = galleryFor(color);
@@ -1100,6 +1161,23 @@ async function renderProduct(){
   renderThumbs(); restartAuto();
   $("#gPrev").onclick=()=>{ showSlide(slideIdx-1); restartAuto(); };
   $("#gNext").onclick=()=>{ showSlide(slideIdx+1); restartAuto(); };
+  // Swipe trái/phải trên ảnh chính để next/prev (mobile + cảm ứng).
+  const stage = $("#mainStage");
+  if(stage){
+    let sx=0, sy=0, tracking=false;
+    stage.addEventListener("touchstart", (e)=>{
+      if(gallery.length<2) return;
+      const t=e.changedTouches[0]; sx=t.clientX; sy=t.clientY; tracking=true;
+    }, {passive:true});
+    stage.addEventListener("touchend", (e)=>{
+      if(!tracking) return; tracking=false;
+      const t=e.changedTouches[0]; const dx=t.clientX-sx, dy=t.clientY-sy;
+      // Chỉ trigger nếu quẹt rõ ràng theo trục ngang (|dx|>40 và |dx| > |dy|*1.5)
+      if(Math.abs(dx)<40 || Math.abs(dx) < Math.abs(dy)*1.5) return;
+      if(dx<0) showSlide(slideIdx+1); else showSlide(slideIdx-1);
+      restartAuto();
+    }, {passive:true});
+  }
   // colors → đổi gallery sang ảnh của màu đó + hiện tên màu cạnh label
   const setColorName = (c)=>{ const el=$("#colorName"); if(el) el.textContent = S.colorName ? " · "+S.colorName(c) : ""; };
   setColorName(color);
@@ -1133,10 +1211,12 @@ async function renderProduct(){
   if(bnBtn) bnBtn.onclick=()=>{ if(doAdd()) location.href="cart.html"; };
 }
 
-/* ---------------- TRANG GIỎ HÀNG ---------------- */
-function renderCart(){
+/* ---------------- TRANG GIỎ HÀNG (giỏ + form đặt hàng cùng 1 màn) ---------------- */
+async function renderCart(){
   const root=$("#page");
-  function draw(){
+  // Tải địa chỉ đã lưu (chỉ khi đăng nhập) — async, không chặn render đầu
+  const savedAddrsPromise = Auth.isLoggedIn() ? DB.listMyAddresses().catch(()=>[]) : Promise.resolve([]);
+  function draw(savedAddrs){
     if(!Cart.items.length){
       root.innerHTML = `<div class="wrap empty-cart">
         <div class="ic">🛍️</div>
@@ -1148,33 +1228,115 @@ function renderCart(){
     }
     const sub = Cart.subtotal();
     const ship = sub>=500000 || sub===0 ? 0 : 30000;
+    const total = sub+ship;
+    const last = getLastContact() || {};
+    const draft = loadCheckoutDraft() || {};
+    // Ưu tiên: draft đang gõ → địa chỉ default đã lưu → lastContact → Auth
+    const defaultAddr = (savedAddrs||[]).find(a=>a.is_default) || (savedAddrs||[])[0];
+    const prefillName    = draft.name   || (Auth.isLoggedIn() && Auth.displayName()) || last.customer_name || (defaultAddr?.recipient) || "";
+    const prefillPhone   = draft.phone  || last.phone || (defaultAddr?.phone) || "";
+    const prefillStreet  = draft.street || last.street || (defaultAddr?.street) || last.address || "";
+    const prefillEmail   = draft.email  || (Auth.isLoggedIn() && Auth.email()) || last.email || "";
+    const prefillStruct  = draft.province_code ? draft : (defaultAddr || last);
+    const accountInfo = Auth.isLoggedIn()
+      ? `<div class="notice" style="background:#eef7f1;color:#1d6c4d;border:1px solid #c5e6d4;font-size:13px">Đặt hàng với tài khoản <b>${escapeXML(Auth.email())}</b> — đơn sẽ lưu vào "Đơn của tôi".</div>`
+      : `<div class="notice" style="background:#fff6e0;color:#7a5b00;border:1px solid #f0d98a;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span>Mẹo: <a href="#" id="ckLogin" style="text-decoration:underline;color:inherit"><b>Đăng nhập Google</b></a> để lưu đơn trên mọi thiết bị.</span></div>`;
+    const emailHint = Email.enabled
+      ? `Email xác nhận đơn hàng sẽ được gửi tới đây.`
+      : `Dùng để liên hệ khi cần xác nhận đơn.`;
+
+    const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>`;
     const items = Cart.items.map((it,i)=>{
       const p=S.getProduct(it.id);
       return `<div class="cart-item">
         <a class="ci-thumb" href="product.html?id=${it.id}">${p?productImage(p,{color:it.color}):S.productSVG({type:"tee",print:it.name,collection:"",colors:[it.color||"#ccc"],name:it.name},{color:it.color})}</a>
         <div>
-          <h4><a href="product.html?id=${it.id}">${it.name}</a></h4>
+          <h4><a href="product.html?id=${it.id}">${escapeXML(it.name)}</a></h4>
           <div class="ci-meta">Màu: <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${safeColor(it.color)};vertical-align:middle;border:1px solid #ccc"></span> · Size: ${escapeXML(it.size||"")}</div>
           <div class="qty"><button data-act="dec" data-i="${i}">−</button><span>${it.qty}</span><button data-act="inc" data-i="${i}">+</button></div>
-          <a class="remove" data-act="rm" data-i="${i}">Xóa</a>
         </div>
-        <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div>
+        <div class="ci-right">
+          <div class="ci-price">${money(it.price*it.qty)}</div>
+          <button class="ci-rm-btn" data-act="rm" data-i="${i}" aria-label="Xoá sản phẩm" title="Xoá">${trashIcon}</button>
+        </div>
       </div>`;
     }).join("");
 
     root.innerHTML = `
-    <div class="wrap page-head"><div class="crumb"><a href="index.html">Trang chủ</a> / Giỏ hàng</div>
-      <h1 class="page-title">Giỏ hàng (${Cart.count()})</h1></div>
-    <div class="wrap cart-wrap">
-      <div>${items}</div>
-      <aside class="summary">
-        <h3>Tóm tắt đơn hàng</h3>
+    <div class="wrap page-head">
+      <div class="crumb"><a href="index.html">Trang chủ</a> / Giỏ hàng</div>
+      <h1 class="page-title">Giỏ hàng <span class="page-count">(${Cart.count()})</span></h1>
+    </div>
+    <div class="wrap cart-page">
+      <div class="cart-main">
+        <section class="cart-items">
+          ${items}
+        </section>
+        <section class="cart-section">
+          <h3 class="cart-section-title">📋 Thông tin nhận hàng</h3>
+          ${accountInfo}
+          ${savedAddrs && savedAddrs.length ? `
+            <div class="saved-addrs">
+              <div class="saved-addrs-head">
+                <span class="saved-addrs-title">Địa chỉ đã lưu</span>
+                <button type="button" class="mini" id="saveCurrentAddr">+ Lưu địa chỉ đang nhập</button>
+              </div>
+              <div class="saved-addrs-list">
+                ${savedAddrs.map(a=>`<button type="button" class="saved-addr-item" data-aid="${escapeXML(a.id)}">
+                  ${a.is_default?'<span class="saved-addr-badge">Mặc định</span>':''}
+                  <div class="saved-addr-name"><b>${escapeXML(a.recipient||"")}</b> · ${escapeXML(a.phone||"")}</div>
+                  <div class="saved-addr-line">${escapeXML([a.street,a.ward_name,a.district_name,a.province_name].filter(Boolean).join(", "))}</div>
+                </button>`).join("")}
+              </div>
+            </div>
+          ` : (Auth.isLoggedIn() ? `<p class="muted" style="font-size:12.5px;margin:10px 0">Chưa có địa chỉ đã lưu. Điền & bấm "+ Lưu" để dùng lại lần sau.</p>` : "")}
+          <form id="ckForm" novalidate autocomplete="on" style="margin-top:14px">
+            <div class="frow">
+              <label class="fld"><span>Họ và tên *</span><input name="name" required value="${escapeXML(prefillName)}"></label>
+              <label class="fld"><span>Số điện thoại *</span><input name="phone" required inputmode="tel" placeholder="VD: 0987654321" value="${escapeXML(prefillPhone)}"></label>
+            </div>
+            <label class="fld"><span>Email *</span><input name="email" type="email" required inputmode="email" autocomplete="email" placeholder="ban@example.com" value="${escapeXML(prefillEmail)}">
+              <small class="muted" style="font-size:12px;display:block;margin-top:4px">${emailHint}</small></label>
+            <label class="fld fld-addr"><span>Địa chỉ nhận hàng *</span>
+              <div class="addr-mode-switch" role="tablist" aria-label="Cấu trúc hành chính">
+                <button type="button" class="addr-mode-opt active" data-mode="new">📅 Mới — 34 tỉnh thành</button>
+                <button type="button" class="addr-mode-opt" data-mode="old">🗓 Cũ — 63 tỉnh thành</button>
+              </div>
+              <div class="addr-picker">
+                <button type="button" class="addr-sel" data-level="p" id="addrPBtn">
+                  <span class="addr-sel-cap">Tỉnh / Thành phố</span>
+                  <span class="addr-sel-val">Chọn</span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4l3.5 4 3.5-4"/></svg>
+                </button>
+                <button type="button" class="addr-sel" data-level="d" id="addrDBtn" disabled>
+                  <span class="addr-sel-cap">Quận / Huyện</span>
+                  <span class="addr-sel-val">Chọn</span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4l3.5 4 3.5-4"/></svg>
+                </button>
+                <button type="button" class="addr-sel" data-level="w" id="addrWBtn" disabled>
+                  <span class="addr-sel-cap">Phường / Xã</span>
+                  <span class="addr-sel-val">Chọn</span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4l3.5 4 3.5-4"/></svg>
+                </button>
+              </div>
+              <input type="text" id="addrStreet" placeholder="Số nhà, tên đường, hẻm/ngõ…" value="${escapeXML(prefillStreet)}" style="margin-top:10px">
+              <small class="muted" style="font-size:11.5px;margin-top:6px;display:block">Nhập đủ <b>số nhà</b> + <b>tên đường</b> để shipper tìm chính xác.</small>
+              <input type="hidden" name="address" id="addrInput">
+            </label>
+            <label class="fld"><span>Ghi chú (tuỳ chọn)</span><input name="note" value="${escapeXML(draft.note||"")}"></label>
+          </form>
+        </section>
+      </div>
+      <aside class="cart-summary">
+        <h3 class="cart-section-title">💰 Tóm tắt đơn hàng</h3>
         <div class="line"><span>Tạm tính</span><span>${money(sub)}</span></div>
         <div class="line"><span>Phí giao hàng</span><span>${ship?money(ship):"Miễn phí"}</span></div>
         ${sub<500000?`<div class="line" style="color:var(--sale);font-size:12.5px">Mua thêm ${money(500000-sub)} để được freeship</div>`:``}
-        <div class="total"><span>Tổng cộng</span><span>${money(sub+ship)}</span></div>
-        <button class="btn btn-dark btn-block" style="margin-top:18px" id="checkoutBtn">Tiến hành đặt hàng</button>
-        <a class="btn btn-outline btn-block" style="margin-top:10px" href="collection.html">Tiếp tục mua sắm</a>
+        <div class="line" style="font-size:12px;color:var(--muted);margin-top:6px"><span>Hình thức</span><span>COD</span></div>
+        <div class="total"><span>Tổng cộng</span><span class="cart-total-amount">${money(total)}</span></div>
+        <button class="btn btn-dark btn-block" type="submit" form="ckForm" id="ckSubmit" style="margin-top:14px">Đặt hàng (COD)</button>
+        <a class="btn btn-outline btn-block" href="collection.html" style="margin-top:10px">Tiếp tục mua sắm</a>
+        <p class="muted" style="font-size:11.5px;text-align:center;margin-top:8px">Thanh toán khi nhận hàng • ${DB.cloud?"Đơn lưu trên hệ thống":"Chế độ demo"}</p>
       </aside>
     </div>`;
 
@@ -1183,144 +1345,423 @@ function renderCart(){
       if(b.dataset.act==="inc") Cart.setQty(i,Cart.items[i].qty+1);
       if(b.dataset.act==="dec") Cart.setQty(i,Cart.items[i].qty-1);
       if(b.dataset.act==="rm")  Cart.remove(i);
-      draw();
+      draw(savedAddrs);
     });
-    const cb=$("#checkoutBtn"); if(cb) cb.onclick=openCheckout;
+    const ckLogin=$("#ckLogin"); if(ckLogin) ckLogin.onclick=(e)=>{ e.preventDefault(); openLoginModal(); };
+    bindAddressPicker(prefillStruct);
+
+    // Click 1 saved-addr → fill toàn bộ form
+    $$(".saved-addr-item").forEach(b=> b.onclick=()=>{
+      const a = (savedAddrs||[]).find(x=>x.id===b.dataset.aid); if(!a) return;
+      const f = $("#ckForm");
+      f.name.value = a.recipient || "";
+      f.phone.value = a.phone || "";
+      $("#addrStreet").value = a.street || "";
+      bindAddressPicker(a);
+      $$(".saved-addr-item").forEach(x=>x.classList.toggle("active", x===b));
+      toast("Đã chọn địa chỉ");
+    });
+
+    // Lưu địa chỉ đang nhập (cho user đăng nhập)
+    const saveBtn = $("#saveCurrentAddr");
+    if(saveBtn) saveBtn.onclick = async ()=>{
+      const f=$("#ckForm");
+      const st = getAddressState();
+      if(!f.name.value.trim() || !f.phone.value.trim() || !$("#addrStreet").value.trim() || !st || !st.p){
+        toast("Hãy điền tên / SĐT / số nhà & chọn Tỉnh/Xã trước");
+        return;
+      }
+      const ok = await confirmDialog({
+        title:"Lưu địa chỉ này?",
+        body:"Địa chỉ sẽ xuất hiện trong danh sách 'Đã lưu' cho lần đặt sau.",
+        confirmText:"Lưu",
+      });
+      if(!ok) return;
+      try{
+        await DB.upsertAddress({
+          label:"Nhà",
+          recipient:f.name.value.trim(), phone:f.phone.value.trim(),
+          province_code:st.p?.code, province_name:st.p?.name,
+          district_code:st.d?.code, district_name:st.d?.name,
+          ward_code:st.w?.code,     ward_name:st.w?.name,
+          street:$("#addrStreet").value.trim(),
+          is_default: !(savedAddrs && savedAddrs.length),
+        });
+        const fresh = await DB.listMyAddresses();
+        draw(fresh);  // re-render với list mới
+      }catch(e){ toast("Lỗi lưu: "+(e.message||e)); }
+    };
+
+    // Autosave draft form (debounce 400ms)
+    let draftTimer = null;
+    const captureDraft = ()=>{
+      const f=$("#ckForm"); const st = getAddressState();
+      const data = {
+        name:f.name.value, phone:f.phone.value, email:f.email.value,
+        note:f.note.value, street:$("#addrStreet").value,
+        province_code:st?.p?.code||null, province_name:st?.p?.name||null,
+        district_code:st?.d?.code||null, district_name:st?.d?.name||null,
+        ward_code:st?.w?.code||null,     ward_name:st?.w?.name||null,
+      };
+      saveCheckoutDraft(data);
+    };
+    $("#ckForm").addEventListener("input", ()=>{ clearTimeout(draftTimer); draftTimer = setTimeout(captureDraft, 400); });
+
+    $("#ckForm").onsubmit=async(e)=>{
+      e.preventDefault();
+      const f=e.target;
+      const ok = validateFields([
+        {el:f.name,    msg:"Vui lòng nhập họ tên"},
+        {el:f.phone,   msg:"SĐT không hợp lệ — đầu số VN 10 số (vd 0987654321)", test:v=> isValidVNPhone(v)},
+        {el:f.email,   msg:"Email không hợp lệ", test:v=> isValidEmail(v)},
+        {el:f.address, msg:"Chọn đủ Tỉnh / Huyện / Xã + nhập số nhà"},
+      ]);
+      const st = getAddressState();
+      // Yêu cầu thêm: phải có Tỉnh + Xã, street không quá ngắn
+      if(ok && (!st || !st.p || !st.w)){
+        setFieldError(f.address, "Vui lòng chọn đầy đủ Tỉnh và Phường/Xã");
+        $("#addrPBtn").focus(); return;
+      }
+      if(ok && (($("#addrStreet").value||"").trim().length < 3)){
+        setFieldError(f.address, "Số nhà / tên đường quá ngắn (≥3 ký tự)");
+        $("#addrStreet").focus(); return;
+      }
+      if(!ok){ $("#ckForm").scrollIntoView({behavior:"smooth",block:"start"}); return; }
+      const name=f.name.value.trim(), phone=f.phone.value.trim().replace(/[\s.\-()]/g,""), email=f.email.value.trim();
+      const address=f.address.value.trim();
+      const btn=$("#ckSubmit"); btn.disabled=true; btn.textContent="Đang xử lý...";
+      const order={
+        customer_name:name, phone, email, address, note:f.note.value.trim(),
+        // Structured (cho shipping API + báo cáo)
+        province_code:st?.p?.code, province_name:st?.p?.name,
+        district_code:st?.d?.code, district_name:st?.d?.name,
+        ward_code:st?.w?.code,     ward_name:st?.w?.name,
+        street:$("#addrStreet").value.trim(),
+        items:Cart.items.map(x=>{ const p=S.getProduct(x.id);
+          return {id:x.id,name:x.name,price:x.price,color:x.color,size:x.size,qty:x.qty, image:(p&&p.image_url)||null}; }),
+        subtotal:sub, shipping:ship, total:total,
+      };
+      try{
+        const saved=await DB.createOrder(order);
+        saveMyOrder(saved);
+        saveLastContact({
+          customer_name:name, phone, email, address,
+          street:order.street,
+          province_code:order.province_code, province_name:order.province_name,
+          district_code:order.district_code, district_name:order.district_name,
+          ward_code:order.ward_code, ward_name:order.ward_name,
+        });
+        clearCheckoutDraft();
+        Cart.items=[]; Cart.save();
+        // Gửi email XÁC NHẬN trước khi chuyển trang. KHÔNG fire-and-forget vì
+        // browser huỷ XHR khi navigate. Đợi tối đa 6s rồi chuyển trang (giữ nguyên "Đang xử lý...").
+        const result = await Promise.race([
+          Email.sendConfirmation({ ...saved, email }).catch(e=>({sent:false, reason:"error", error:e})),
+          new Promise(r=>setTimeout(()=>r({sent:false, reason:"timeout"}), 6000)),
+        ]);
+        if(result && result.sent) sessionStorage.setItem("ck_email_sent_"+saved.code, email);
+        else if(result && !["disabled","no-email"].includes(result.reason)) console.warn("[Email] không gửi được, reason:", result.reason, result.error);
+        location.href="order.html?code="+encodeURIComponent(saved.code)+"&new=1";
+      }catch(err){
+        console.error(err); btn.disabled=false; btn.textContent="Đặt hàng (COD)";
+        toast("Lỗi đặt hàng: "+(err.message||err));
+      }
+    };
   }
-  draw();
+  // Render lần đầu (chưa có addresses), sau khi fetch xong → re-render
+  draw([]);
+  savedAddrsPromise.then(list=>{
+    if(Cart.items.length) draw(list);
+  });
 }
 
 /* ---------------- CHECKOUT (đặt hàng) ---------------- */
 function isValidEmail(s){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s||"").trim()); }
+// VN phone: 0xxx hoặc +84xxx, prefix 3/5/7/8/9, đúng 10 số sau prefix mạng
+function isValidVNPhone(s){
+  const v = (s||"").replace(/[\s.\-()]/g,"");
+  return /^(\+84|0)(3|5|7|8|9)\d{8}$/.test(v);
+}
 
-function openCheckout(){
-  if(!Cart.items.length){ toast("Giỏ hàng trống"); return; }
-  const sub=Cart.subtotal(); const ship = sub>=500000?0:30000; const total=sub+ship;
-  const last = getLastContact() || {};
-  const prefillName = (Auth.isLoggedIn() && Auth.displayName()) || last.customer_name || "";
-  const prefillPhone = last.phone || "";
-  const prefillAddress = last.address || "";
-  const prefillEmail = (Auth.isLoggedIn() && Auth.email()) || last.email || "";
-  const accountInfo = Auth.isLoggedIn()
-    ? `<div class="notice" style="background:#eef7f1;color:#1d6c4d;border:1px solid #c5e6d4;font-size:13px">
-        Đặt hàng với tài khoản <b>${escapeXML(Auth.email())}</b> — đơn sẽ lưu vào "Đơn của tôi".
-       </div>`
-    : `<div class="notice" style="background:#fff6e0;color:#7a5b00;border:1px solid #f0d98a;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px">
-        <span>Mẹo: <a href="#" id="ckLogin" style="text-decoration:underline;color:inherit"><b>Đăng nhập Google</b></a> để lưu đơn vào tài khoản & xem trên mọi thiết bị.</span>
-       </div>`;
-  const emailHint = Email.enabled
-    ? `Email xác nhận đơn hàng sẽ được gửi tới đây.`
-    : `Dùng để liên hệ khi cần xác nhận đơn.`;
-  const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="checkoutModal";
-  ov.innerHTML=`<div class="modal">
-    <button class="modal-close" id="ckClose" aria-label="Đóng">×</button>
-    <h3 class="modal-title">Thông tin đặt hàng</h3>
-    ${accountInfo}
-    <form id="ckForm" novalidate autocomplete="on">
-      <label class="fld"><span>Họ và tên *</span><input name="name" required value="${escapeXML(prefillName)}"></label>
-      <label class="fld"><span>Số điện thoại *</span><input name="phone" required inputmode="tel" value="${escapeXML(prefillPhone)}"></label>
-      <label class="fld"><span>Email *</span><input name="email" type="email" required inputmode="email" autocomplete="email" placeholder="ban@example.com" value="${escapeXML(prefillEmail)}">
-        <small class="muted" style="font-size:12px;display:block;margin-top:4px">${emailHint}</small></label>
-      <label class="fld"><span>Địa chỉ nhận hàng *</span><textarea name="address" rows="2" required>${escapeXML(prefillAddress)}</textarea></label>
-      <label class="fld"><span>Ghi chú (tuỳ chọn)</span><input name="note"></label>
-      <div class="modal-foot">
-        <div class="ck-summary">
-          <div class="line"><span>Tạm tính</span><span>${money(sub)}</span></div>
-          <div class="line"><span>Giao hàng</span><span>${ship?money(ship):"Miễn phí"}</span></div>
-          <div class="total"><span>Tổng cộng</span><span>${money(total)}</span></div>
-        </div>
-        <button class="btn btn-dark btn-block" type="submit" id="ckSubmit">Đặt hàng (COD)</button>
-        <p class="muted" style="font-size:12px;text-align:center;margin-top:8px">Thanh toán khi nhận hàng • ${DB.cloud?"Đơn lưu trên hệ thống":"Chế độ demo (lưu trên máy)"}</p>
+/* Lưu / khôi phục draft form checkout vào localStorage (debounced) */
+const CHECKOUT_DRAFT_KEY = "originals_checkout_draft_v1";
+function loadCheckoutDraft(){ try{ return JSON.parse(localStorage.getItem(CHECKOUT_DRAFT_KEY)||"null"); }catch(e){ return null; } }
+function saveCheckoutDraft(data){ try{ localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(data)); }catch(e){} }
+function clearCheckoutDraft(){ try{ localStorage.removeItem(CHECKOUT_DRAFT_KEY); }catch(e){} }
+
+/* Shopee-style address picker — 3 dropdown cascade (Tỉnh → Huyện → Xã) + ô số nhà/đường.
+   Data: provinces.open-api.vn (free, không cần API key). Cache trong session. */
+const VN_ADDR_API = "https://provinces.open-api.vn/api";
+const _addrCache = { provinces: null, district: {}, ward: {} };
+async function fetchProvinces(){
+  if(_addrCache.provinces) return _addrCache.provinces;
+  const res = await fetch(`${VN_ADDR_API}/p/`);
+  _addrCache.provinces = await res.json();
+  return _addrCache.provinces;
+}
+async function fetchDistricts(provinceCode){
+  if(_addrCache.district[provinceCode]) return _addrCache.district[provinceCode];
+  const res = await fetch(`${VN_ADDR_API}/p/${provinceCode}?depth=2`);
+  const data = await res.json();
+  _addrCache.district[provinceCode] = data.districts||[];
+  return _addrCache.district[provinceCode];
+}
+async function fetchWards(districtCode){
+  if(_addrCache.ward[districtCode]) return _addrCache.ward[districtCode];
+  const res = await fetch(`${VN_ADDR_API}/d/${districtCode}?depth=2`);
+  const data = await res.json();
+  _addrCache.ward[districtCode] = data.wards||[];
+  return _addrCache.ward[districtCode];
+}
+function openAddrPicker(title, list, onSelect){
+  const ov = document.createElement("div");
+  ov.className = "modal-overlay";
+  ov.id = "addrPickModal";
+  ov.innerHTML = `<div class="modal addr-pick-modal">
+    <h3 class="modal-title">${escapeXML(title)}</h3>
+    <button class="modal-close" aria-label="Đóng">×</button>
+    <input type="text" class="addr-pick-search" placeholder="🔍 Tìm kiếm...">
+    <div class="addr-pick-listwrap">
+      <div class="addr-pick-list">
+        ${list.map((it,i)=>`<button type="button" class="addr-pick-item" data-i="${i}">${escapeXML(it.name)}</button>`).join("")}
       </div>
-    </form>
+      <div class="addr-pick-empty" hidden>
+        <div class="addr-pick-empty-ic">🔍</div>
+        <div class="addr-pick-empty-text">Không tìm thấy địa danh nào khớp với "<b id="addrPickEmptyQ"></b>"</div>
+        <div class="muted" style="font-size:12px;margin-top:6px">Thử gõ ngắn hơn hoặc đổi cách viết (vd: "Hà Nội" → "ha noi")</div>
+      </div>
+    </div>
   </div>`;
   document.body.appendChild(ov);
   requestAnimationFrame(()=>ov.classList.add("show"));
-  const close=()=>{ ov.classList.remove("show"); setTimeout(()=>ov.remove(),200); };
-  $("#ckClose").onclick=close;
-  ov.addEventListener("click",e=>{ if(e.target===ov) close(); });
-  const ckLogin=$("#ckLogin"); if(ckLogin) ckLogin.onclick=(e)=>{ e.preventDefault(); close(); openLoginModal(); };
-  $("#ckForm").onsubmit=async(e)=>{
-    e.preventDefault();
-    const f=e.target;
-    const name=f.name.value.trim(), phone=f.phone.value.trim(),
-          email=f.email.value.trim(), address=f.address.value.trim();
-    const ok = validateFields([
-      {el:f.name,    msg:"Vui lòng nhập họ tên"},
-      {el:f.phone,   msg:"Vui lòng nhập số điện thoại", test:v=> /^[0-9+\-\s().]{8,}$/.test(v)},
-      {el:f.email,   msg:"Email không hợp lệ", test:v=> isValidEmail(v)},
-      {el:f.address, msg:"Vui lòng nhập địa chỉ giao hàng"},
-    ]);
-    if(!ok) return;
-    const btn=$("#ckSubmit"); btn.disabled=true; btn.textContent="Đang xử lý...";
-    const order={ customer_name:name, phone, email, address, note:f.note.value.trim(),
-      items:Cart.items.map(x=>{ const p=S.getProduct(x.id);
-        return {id:x.id,name:x.name,price:x.price,color:x.color,size:x.size,qty:x.qty, image:(p&&p.image_url)||null}; }),
-      subtotal:sub, shipping:ship, total:total };
-    try{
-      const saved=await DB.createOrder(order);
-      saveMyOrder(saved);
-      saveLastContact({customer_name:name, phone, email, address});
-      Cart.items=[]; Cart.save();
-      // Gửi email xác nhận (không chặn redirect — nếu lỗi vẫn vào trang đơn)
-      const orderForEmail = { ...saved, email };
-      Email.sendConfirmation(orderForEmail).then(r=>{
-        if(r.sent) sessionStorage.setItem("ck_email_sent_"+saved.code, email);
-      });
-      location.href="order.html?code="+encodeURIComponent(saved.code)+"&new=1";
-    }catch(err){
-      console.error(err); btn.disabled=false; btn.textContent="Đặt hàng (COD)";
-      toast("Lỗi đặt hàng: "+(err.message||err));
+  const close = ()=>{ ov.classList.remove("show"); setTimeout(()=>ov.remove(), 200); };
+  ov.querySelector(".modal-close").onclick = close;
+  ov.addEventListener("click", e=>{ if(e.target===ov) close(); });
+  const search = ov.querySelector(".addr-pick-search");
+  const lst = ov.querySelector(".addr-pick-list");
+  const empty = ov.querySelector(".addr-pick-empty");
+  const emptyQ = ov.querySelector("#addrPickEmptyQ");
+  // Bỏ dấu để search "ha noi" ra "Hà Nội"
+  const noDiacritics = (s)=> (s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/đ/g,"d");
+  search.addEventListener("input", ()=>{
+    const q = noDiacritics((search.value||"").trim());
+    let matched = 0;
+    lst.querySelectorAll(".addr-pick-item").forEach(b=>{
+      const name = noDiacritics(b.textContent);
+      const show = (!q || name.includes(q));
+      b.style.display = show ? "" : "none";
+      if(show) matched++;
+    });
+    // Show empty placeholder + giữ chiều cao list (không co popup)
+    if(matched===0 && q){
+      empty.hidden = false;
+      lst.style.display = "none";
+      emptyQ.textContent = search.value.trim();
+    } else {
+      empty.hidden = true;
+      lst.style.display = "";
     }
+  });
+  lst.onclick = (e)=>{
+    const b = e.target.closest(".addr-pick-item");
+    if(!b) return;
+    onSelect(list[+b.dataset.i]);
+    close();
   };
+  setTimeout(()=>search.focus(), 100);
+}
+/* Trả state hiện tại để form submit có thể đọc structured fields */
+let _addrPickerState = null;
+function getAddressState(){ return _addrPickerState; }
+
+function bindAddressPicker(prefill){
+  const pBtn = $("#addrPBtn"), dBtn = $("#addrDBtn"), wBtn = $("#addrWBtn");
+  const streetInp = $("#addrStreet"), addrInp = $("#addrInput");
+  const state = { p: null, d: null, w: null };
+  _addrPickerState = state;
+  // Mặc định "new" (34 tỉnh, 2 cấp); user toggle sang "old" để chọn theo 3 cấp.
+  let mode = "new";
+  const setLabel = (btn, txt, active)=>{
+    const val = btn.querySelector(".addr-sel-val");
+    if(val) val.textContent = txt;
+    btn.classList.toggle("active", !!active);
+  };
+  const syncFinal = ()=>{
+    const parts = [];
+    if(streetInp.value.trim()) parts.push(streetInp.value.trim());
+    if(state.w) parts.push(state.w.name);
+    if(state.d) parts.push(state.d.name);
+    if(state.p) parts.push(state.p.name);
+    addrInp.value = parts.join(", ");
+    state.street = streetInp.value.trim();
+    if(addrInp.value) setFieldError(addrInp, "");
+  };
+  const loadingBtn = (btn, on)=>{ btn.disabled = on; btn.classList.toggle("loading", on); };
+  const applyMode = ()=>{
+    if(mode==="new"){ dBtn.style.display = "none"; }
+    else { dBtn.style.display = ""; }
+    state.p = state.d = state.w = null;
+    setLabel(pBtn, "Chọn", false);
+    setLabel(dBtn, "Chọn", false); dBtn.disabled = true;
+    setLabel(wBtn, "Chọn", false); wBtn.disabled = true;
+    syncFinal();
+  };
+  applyMode(); // áp dụng default "new" ngay
+  $$(".addr-mode-opt").forEach(b=> b.onclick=()=>{
+    if(b.classList.contains("active")) return;
+    $$(".addr-mode-opt").forEach(x=>x.classList.toggle("active", x===b));
+    mode = b.dataset.mode;
+    applyMode();
+  });
+  pBtn.onclick = async ()=>{
+    loadingBtn(pBtn, true);
+    try{
+      const list = await fetchProvinces();
+      loadingBtn(pBtn, false);
+      openAddrPicker("Chọn Tỉnh/Thành phố", list, (item)=>{
+        state.p = item; state.d = null; state.w = null;
+        setLabel(pBtn, item.name, true);
+        if(mode==="new"){
+          setLabel(wBtn, "Chọn", false); wBtn.disabled = false;
+        } else {
+          setLabel(dBtn, "Chọn", false); dBtn.disabled = false;
+          setLabel(wBtn, "Chọn", false); wBtn.disabled = true;
+        }
+        syncFinal();
+      });
+    }catch(e){ loadingBtn(pBtn, false); toast("Lỗi tải danh sách tỉnh"); }
+  };
+  dBtn.onclick = async ()=>{
+    if(!state.p) return;
+    loadingBtn(dBtn, true);
+    try{
+      const list = await fetchDistricts(state.p.code);
+      loadingBtn(dBtn, false);
+      openAddrPicker(`Chọn Quận/Huyện · ${state.p.name}`, list, (item)=>{
+        state.d = item; state.w = null;
+        setLabel(dBtn, item.name, true);
+        setLabel(wBtn, "Phường/Xã", false); wBtn.disabled = false;
+        syncFinal();
+      });
+    }catch(e){ loadingBtn(dBtn, false); toast("Lỗi tải danh sách huyện"); }
+  };
+  wBtn.onclick = async ()=>{
+    // New mode (2 cấp): wards thuộc tỉnh. Old mode (3 cấp): wards thuộc huyện.
+    const isNew = (mode==="new");
+    if(isNew && !state.p) return;
+    if(!isNew && !state.d) return;
+    loadingBtn(wBtn, true);
+    try{
+      const list = isNew ? await fetchWardsByProvince(state.p.code) : await fetchWards(state.d.code);
+      loadingBtn(wBtn, false);
+      const subtitle = isNew ? state.p.name : state.d.name;
+      openAddrPicker(`Chọn Phường/Xã · ${subtitle}`, list, (item)=>{
+        state.w = item;
+        setLabel(wBtn, item.name, true);
+        syncFinal();
+      });
+    }catch(e){ loadingBtn(wBtn, false); toast("Lỗi tải danh sách xã"); }
+  };
+  streetInp.addEventListener("input", syncFinal);
+  // Khởi tạo từ prefill có structured (province_code...) — fill nhanh không phải pick lại
+  if(prefill && prefill.province_code){
+    // Có district_code → là dữ liệu cũ 3-cấp → switch sang old mode
+    if(prefill.district_code){
+      mode = "old";
+      $$(".addr-mode-opt").forEach(x=>x.classList.toggle("active", x.dataset.mode==="old"));
+      dBtn.style.display = "";
+    }
+    state.p = { code: prefill.province_code, name: prefill.province_name };
+    setLabel(pBtn, prefill.province_name, true);
+    if(prefill.district_code){
+      state.d = { code: prefill.district_code, name: prefill.district_name };
+      setLabel(dBtn, prefill.district_name, true);
+      dBtn.disabled = false;
+    }
+    if(prefill.ward_code){
+      state.w = { code: prefill.ward_code, name: prefill.ward_name };
+      setLabel(wBtn, prefill.ward_name, true);
+      wBtn.disabled = false;
+    } else {
+      wBtn.disabled = false;
+    }
+  }
+  if(streetInp.value.trim()) syncFinal();
+}
+async function fetchWardsByProvince(provinceCode){
+  // depth=3 trả về province → wards trực tiếp (cho API 2-level)
+  const res = await fetch(`${VN_ADDR_API}/p/${provinceCode}?depth=3`);
+  const data = await res.json();
+  // Hỗ trợ cả schema: data.wards (trực tiếp) hoặc data.districts[].wards (gộp lại)
+  if(Array.isArray(data.wards)) return data.wards;
+  if(Array.isArray(data.districts)) return data.districts.flatMap(d=>d.wards||[]);
+  return [];
 }
 
-/* Modal chi tiết đơn — dùng cho list "Đơn của tôi" (không cần fetch lại) */
+/* Modal chi tiết đơn — vertical timeline + receipt style */
 function openOrderDetailModal(o){
   const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;
   const steps=["pending","confirmed","shipping","completed"];
-  const timeline = o.status==="cancelled"
+  // Horizontal timeline (ngang) — track xám + fill xanh theo --progress
+  const htimeline = o.status==="cancelled"
     ? `<div class="od-cancel">Đơn hàng này đã bị huỷ.</div>`
-    : `<div class="od-track-card"><div class="timeline">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;const cur=info.step===st.step;
-        return `<div class="tl-step ${done?'done':''} ${cur?'cur':''}"><div class="tl-dot">${done?'✓':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div></div>`;
+    : `<div class="od-track-card">
+        <div class="timeline" style="--progress:${Math.max(0,st.step)/(steps.length-1)}">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;const cur=info.step===st.step;
+        return `<div class="tl-step ${done?'done':''} ${cur?'cur':''}"><div class="tl-dot">${done?'<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5"/></svg>':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div>
+      </div>`;
+
   const items=(o.items||[]).map(it=>{
     const url=`product.html?id=${encodeURIComponent(it.id)}`;
-    return `<div class="od-item">
-      <a class="od-item-thumb" href="${url}">${orderItemImage(it)}</a>
-      <div class="od-item-info">
-        <a class="od-item-name" href="${url}">${escapeXML(it.name)}</a>
-        <div class="od-item-meta"><span class="od-swatch" style="background:${safeColor(it.color)}"></span>${it.size?`Size ${escapeXML(it.size)} · `:""}SL ${it.qty}</div>
+    const colorName = (S.colorName&&it.color)?S.colorName(it.color):"";
+    return `<div class="od-r-item">
+      <a class="od-r-thumb" href="${url}">${orderItemImage(it)}</a>
+      <div class="od-r-info">
+        <a class="od-r-name" href="${url}">${escapeXML(it.name)}</a>
+        <div class="od-r-meta">
+          ${it.color?`<span class="od-swatch" style="background:${safeColor(it.color)}"></span>${escapeXML(colorName||it.color)}`:""}
+          ${it.size?` · Size ${escapeXML(it.size)}`:""}
+          · <b>×${it.qty}</b>
+        </div>
       </div>
-      <div class="od-item-price"><div class="p-now">${money(it.price*it.qty)}</div>${it.qty>1?`<div class="p-unit">${money(it.price)} × ${it.qty}</div>`:""}</div>
+      <div class="od-r-price">${money(it.price*it.qty)}</div>
     </div>`;
   }).join("");
 
   const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="orderDetailModal";
-  ov.innerHTML=`<div class="modal od-modal" style="--od-accent:${st.color}">
-    <button class="modal-close" id="odClose" aria-label="Đóng">×</button>
+  ov.innerHTML=`<div class="modal od-modal od-modal-v" style="--od-accent:${st.color}">
     <div class="od-head">
+      <button class="modal-close" id="odClose" aria-label="Đóng">×</button>
       <div class="od-head-top">
-        <div><div class="od-eyebrow">Đơn hàng</div><h3 class="od-code">#${escapeXML(o.code)}</h3></div>
+        <div class="od-head-left"><div class="od-eyebrow">Đơn hàng</div><h3 class="od-code">#${escapeXML(o.code)}</h3></div>
         <span class="status-pill" style="background:${st.color}">${st.label}</span>
       </div>
       <div class="od-date">🕒 Đặt lúc ${new Date(o.created_at).toLocaleString("vi-VN")}</div>
     </div>
     <div class="od-body">
-      ${timeline}
-      <div class="od-section">
-        <div class="od-section-title">Sản phẩm <span class="muted">(${(o.items||[]).length})</span></div>
-        <div class="od-items">${items}</div>
+      <div class="od-v-section od-v-track">
+        <div class="od-v-title">Tiến trình đơn hàng</div>
+        ${htimeline}
       </div>
-      <div class="od-grid">
-        <div class="od-card">
-          <div class="od-card-title">📍 Giao tới</div>
-          <div class="od-ship"><span class="name">${escapeXML(o.customer_name||"")}</span> · ${escapeXML(o.phone||"")}<br>${escapeXML(o.address||"")}${o.note?`<br><span class="muted">Ghi chú: ${escapeXML(o.note)}</span>`:""}</div>
+
+      <div class="od-v-section">
+        <div class="od-v-title">Sản phẩm <span class="od-count">${(o.items||[]).length}</span></div>
+        <div class="od-receipt">${items}</div>
+      </div>
+
+      <div class="od-v-section">
+        <div class="od-v-title">📍 Giao tới</div>
+        <div class="od-v-ship">
+          <div class="od-v-ship-row1"><b>${escapeXML(o.customer_name||"")}</b><span class="od-v-sep">·</span><span>${escapeXML(o.phone||"")}</span></div>
+          <div class="od-v-ship-addr">${escapeXML(o.address||"")}</div>
+          ${o.note?`<div class="od-v-ship-note"><b>Ghi chú:</b> ${escapeXML(o.note)}</div>`:""}
         </div>
-        <div class="od-card od-sum">
-          <div class="line"><span>Tạm tính</span><span>${money(o.subtotal||0)}</span></div>
-          <div class="line"><span>Giao hàng</span><span>${o.shipping?money(o.shipping):"Miễn phí"}</span></div>
-          <div class="total"><span>Tổng cộng</span><span>${money(o.total||0)}</span></div>
-        </div>
+      </div>
+
+      <div class="od-v-section od-v-sum">
+        <div class="line"><span>Tạm tính</span><span>${money(o.subtotal||0)}</span></div>
+        <div class="line"><span>Phí giao hàng</span><span>${o.shipping?money(o.shipping):"Miễn phí"}</span></div>
+        <div class="line"><span class="muted" style="font-size:12px">Hình thức</span><span class="muted" style="font-size:12px">COD</span></div>
+        <div class="total"><span>Tổng thanh toán</span><span class="od-total-amount">${money(o.total||0)}</span></div>
       </div>
     </div>
   </div>`;
@@ -1344,9 +1785,9 @@ async function renderOrder(){
 
     let accountBlock = "";
     if(Auth.isLoggedIn()){
-      const heading = `<h3 style="font-family:var(--font-display);text-transform:uppercase;font-size:16px;margin:0 0 12px">Đơn của tôi${myOrders.length?` (${myOrders.length})`:""}</h3>`;
+      // Bỏ heading "Đơn của tôi" trong block vì H1 page-title đã có; tránh trùng lặp.
       if(myOrders.length){
-        accountBlock = heading + myOrders.map(o=>{
+        accountBlock = myOrders.map(o=>{
           const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;
           return `<button type="button" class="my-orders-row" data-code="${escapeXML(o.code)}">
             <div><div class="mo-code">${escapeXML(o.code)}</div><div class="mo-date">${new Date(o.created_at).toLocaleString("vi-VN")} · ${(o.items||[]).reduce((s,i)=>s+i.qty,0)} sản phẩm</div></div>
@@ -1355,7 +1796,7 @@ async function renderOrder(){
           </button>`;
         }).join("");
       } else {
-        accountBlock = heading + `<p class="muted" style="margin-bottom:24px">Bạn chưa có đơn nào trên tài khoản <b>${escapeXML(Auth.email())}</b>. Đặt đơn đầu tiên nhé!</p>`;
+        accountBlock = `<p class="muted" style="margin-bottom:24px">Bạn chưa có đơn nào trên tài khoản <b>${escapeXML(Auth.email())}</b>. Đặt đơn đầu tiên nhé!</p>`;
       }
     } else {
       accountBlock = `<div class="notice" style="background:#fff6e0;color:#7a5b00;border:1px solid #f0d98a;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap">
@@ -1373,7 +1814,7 @@ async function renderOrder(){
 
     root.innerHTML=`
     <div class="wrap page-head"><div class="crumb"><a href="index.html">Trang chủ</a> / ${Auth.isLoggedIn()?"Đơn của tôi":"Tra cứu đơn hàng"}</div>
-      <h1 class="page-title">${Auth.isLoggedIn()?"Đơn của tôi":"Tra cứu đơn hàng"}</h1></div>
+      <h1 class="page-title">${Auth.isLoggedIn()?`Đơn của tôi${myOrders.length?` <span class="page-count">(${myOrders.length})</span>`:""}`:"Tra cứu đơn hàng"}</h1></div>
     <div class="wrap" style="max-width:680px;padding-bottom:60px">
       ${msg?`<div class="notice err">${msg}</div>`:""}
       ${accountBlock}
@@ -1405,7 +1846,15 @@ async function renderOrder(){
 
   if(!code){ await lookupView(); return; }
 
-  root.innerHTML=`<div class="wrap" style="padding:80px 0;text-align:center;color:var(--muted)">Đang tải đơn ${escapeXML(code)}…</div>`;
+  // Skeleton trang tra cứu đơn
+  root.innerHTML=`<div class="wrap page-head"><span class="sk sk-line" style="width:200px;height:13px;margin-bottom:14px"></span><span class="sk sk-line" style="width:280px;height:34px"></span></div>
+    <div class="wrap" style="max-width:680px;padding-bottom:60px">
+      <span class="sk sk-block" style="display:block;height:160px;border-radius:16px;margin-bottom:24px"></span>
+      ${Array.from({length:2}, _=>`<div class="sk-order-row">
+        <div style="flex:1"><span class="sk sk-line" style="width:140px;height:14px;margin-bottom:8px"></span><span class="sk sk-line" style="width:80%;height:11px"></span></div>
+        <span class="sk sk-block" style="width:100px;height:24px;border-radius:30px"></span>
+      </div>`).join("")}
+    </div>`;
   let o=null;
   try{ o=await DB.getOrderByCode(code); }catch(e){ console.warn(e); }
   if(!o){ await lookupView(`Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Vui lòng kiểm tra lại mã.`); return; }
@@ -1414,8 +1863,9 @@ async function renderOrder(){
   const steps=["pending","confirmed","shipping","completed"];
   const timeline = o.status==="cancelled"
     ? `<div class="notice err">Đơn hàng này đã bị huỷ.</div>`
-    : `<div class="timeline">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;
-        return `<div class="tl-step ${done?'done':''}"><div class="tl-dot">${done?'✓':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div>`;
+    : `<div class="od-track-card">
+        <div class="timeline" style="--progress:${Math.max(0,st.step)/(steps.length-1)}">${steps.map(s=>{const info=ORDER_STATUS[s];const done=info.step<=st.step;const cur=info.step===st.step;
+        return `<div class="tl-step ${done?'done':''} ${cur?'cur':''}"><div class="tl-dot">${done?'<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5"/></svg>':''}</div><div class="tl-label">${info.label}</div></div>`;}).join("")}</div></div>`;
 
   const items=(o.items||[]).map(it=>{
     return `<div class="cart-item">
@@ -1424,8 +1874,8 @@ async function renderOrder(){
       <div style="text-align:right;font-weight:700">${money(it.price*it.qty)}</div></div>`;}).join("");
 
   root.innerHTML=`
-  <div class="wrap page-head"><div class="crumb"><a href="index.html">Trang chủ</a> / <a href="order.html">Tra cứu</a> / ${o.code}</div>
-    <h1 class="page-title">Đơn ${o.code}</h1>
+  <div class="wrap page-head"><div class="crumb"><a href="index.html">Trang chủ</a> / <a href="order.html">Tra cứu đơn hàng</a></div>
+    <h1 class="page-title">#${escapeXML(o.code)}</h1>
     <div style="margin-top:8px"><span class="status-pill" style="background:${st.color}">${st.label}</span>
     <span class="muted" style="margin-left:10px">Đặt lúc ${new Date(o.created_at).toLocaleString("vi-VN")}</span></div>
   </div>
@@ -1529,18 +1979,73 @@ const Catalog = { loaded:false, async load(){
   this.loaded=true;
 }};
 
-/* ---------------- LOADING OVERLAY ---------------- */
-function showAppLoader(){
-  if($("#appLoader")) return;
-  const el=document.createElement("div");
-  el.className="app-loader"; el.id="appLoader";
-  el.innerHTML=`<div class="al-logo">${S.BRAND.name}<span class="dot">.</span></div><div class="app-spinner"></div>`;
-  document.body.appendChild(el);
-}
-function hideAppLoader(){
-  const el=$("#appLoader"); if(!el) return;
-  el.classList.add("hide");
-  setTimeout(()=>el.remove(), 400);
+/* ---------------- SKELETON LOADING ----------------
+   Thay loader cứng bằng skeleton — render layout giả lập trong #page ngay khi
+   boot, để user thấy ngay khung trang thay vì màn trắng. Khi data sẵn sàng,
+   render thật sẽ ghi đè skeleton. */
+const skCard = ()=>`<article class="card sk-card">
+  <div class="sk sk-thumb"></div>
+  <div class="sk-info">
+    <span class="sk sk-line w-30"></span>
+    <span class="sk sk-line w-90"></span>
+    <span class="sk sk-line w-60"></span>
+  </div>
+</article>`;
+const skGrid = (n=8)=>`<div class="grid">${Array.from({length:n}, skCard).join("")}</div>`;
+const skHeaderHTML = `<div class="sk-header"><div class="wrap" style="display:flex;align-items:center;gap:16px;padding:18px 20px">
+  <span class="sk sk-block" style="width:30px;height:20px"></span>
+  <span class="sk sk-block" style="width:140px;height:20px;margin:0 auto"></span>
+  <span class="sk sk-block" style="width:34px;height:30px;border-radius:50%"></span>
+  <span class="sk sk-block" style="width:34px;height:30px;border-radius:50%"></span>
+</div></div>`;
+function renderSkeleton(page){
+  const root = $("#page"); if(!root) return;
+  // Header skeleton — render ngay vào #site-header để không trắng đầu trang
+  const sh = $("#site-header"); if(sh && !sh.children.length) sh.innerHTML = skHeaderHTML;
+  if(page==="home"){
+    root.innerHTML = `<section class="sk-hero"></section>
+      <div class="wrap" style="padding:40px 0">${skGrid(4)}</div>
+      <div class="wrap" style="padding:0 0 60px">${skGrid(8)}</div>`;
+  } else if(page==="collection"){
+    root.innerHTML = `<div class="wrap page-head"><span class="sk sk-line" style="width:180px;height:13px;margin-bottom:14px"></span><span class="sk sk-line" style="width:280px;height:36px"></span></div>
+      <div class="wrap" style="padding-bottom:60px">${skGrid(8)}</div>`;
+  } else if(page==="product"){
+    root.innerHTML = `<div class="wrap" style="padding:24px 0">
+      <div class="sk-pdp">
+        <div class="sk sk-pdp-img"></div>
+        <div class="sk-pdp-info">
+          <span class="sk sk-line" style="width:120px;height:12px"></span>
+          <span class="sk sk-line" style="width:80%;height:32px"></span>
+          <span class="sk sk-line" style="width:140px;height:24px"></span>
+          <span class="sk sk-line" style="width:90%;height:12px"></span>
+          <span class="sk sk-line" style="width:80%;height:12px"></span>
+          <span class="sk sk-line" style="width:160px;height:42px;border-radius:30px;margin-top:18px"></span>
+          <span class="sk sk-line" style="width:60%;height:14px"></span>
+          <div style="display:flex;gap:8px;margin-top:18px">${Array.from({length:4}, _=>`<span class="sk sk-block" style="width:46px;height:42px;border-radius:8px"></span>`).join("")}</div>
+          <span class="sk sk-line" style="width:100%;height:54px;border-radius:14px;margin-top:24px"></span>
+        </div>
+      </div></div>`;
+  } else if(page==="cart"){
+    root.innerHTML = `<div class="wrap page-head"><span class="sk sk-line" style="width:260px;height:36px"></span></div>
+      <div class="wrap sk-cart">
+        <div>${Array.from({length:3}, _=>`<div class="sk-cart-row">
+          <span class="sk sk-block" style="width:104px;aspect-ratio:4/5;border-radius:10px"></span>
+          <div style="flex:1"><span class="sk sk-line" style="width:60%;height:14px;margin-bottom:8px"></span><span class="sk sk-line" style="width:40%;height:12px;margin-bottom:14px"></span><span class="sk sk-line" style="width:120px;height:32px;border-radius:30px"></span></div>
+          <span class="sk sk-line" style="width:80px;height:18px"></span>
+        </div>`).join("")}</div>
+        <aside><span class="sk sk-block" style="width:100%;height:300px;border-radius:14px"></span></aside>
+      </div>`;
+  } else if(page==="order"){
+    root.innerHTML = `<div class="wrap page-head"><span class="sk sk-line" style="width:160px;height:12px;margin-bottom:14px"></span><span class="sk sk-line" style="width:240px;height:36px"></span></div>
+      <div class="wrap" style="max-width:680px;padding-bottom:60px">
+        ${Array.from({length:3}, _=>`<div class="sk-order-row">
+          <div style="flex:1"><span class="sk sk-line" style="width:140px;height:15px;margin-bottom:8px"></span><span class="sk sk-line" style="width:80%;height:12px"></span></div>
+          <span class="sk sk-block" style="width:100px;height:26px;border-radius:30px"></span>
+        </div>`).join("")}
+      </div>`;
+  } else {
+    root.innerHTML = `<div class="wrap" style="padding:60px 0">${skGrid(6)}</div>`;
+  }
 }
 
 /* ---------------- NÚT LÊN ĐẦU TRANG ---------------- */
@@ -1558,26 +2063,30 @@ function initScrollTop(){
 
 /* ---------------- BOOT ---------------- */
 document.addEventListener("DOMContentLoaded", async ()=>{
-  showAppLoader();
-  // Danh mục phải nạp trước (vì map sản phẩm cần tên/type danh mục)
+  const page = document.body.dataset.page;
+  // Categories/Colors/Home/Auth không phụ thuộc DB sản phẩm — load nhanh, không skeleton
   await Promise.all([Categories.load(), Colors.load(), Home.load(), Auth.init()]);
-  await Catalog.load();
   renderHeader();
   renderFooter();
-  const page = document.body.dataset.page;
+  // Render trang ngay với static content; phần grid sản phẩm hiển thị skeleton cho tới khi Catalog.load() xong
   if(page==="home") renderHome();
   if(page==="collection") renderCollection();
   if(page==="product") renderProduct();
   if(page==="cart") renderCart();
   if(page==="order") renderOrder();
-  // Khi user đăng nhập / đăng xuất (kể cả OAuth callback bắn muộn), vẽ lại các trang
-  // mà nội dung phụ thuộc Auth: order (tra cứu vs danh sách đơn), cart (gắn user_id checkout).
+  // Load Catalog (API products) ở background; xong → re-render các trang phụ thuộc danh sách SP
+  Catalog.load().then(()=>{
+    if(page==="home") renderHome();
+    if(page==="collection") renderCollection();
+    // product/cart/order: ảnh & tên SP có thể lookup qua getProduct → cũng re-render
+    if(page==="product" && !S.getProduct(param("id"))) renderProduct();
+    if(page==="cart") renderCart();
+    if(page==="order") renderOrder();
+  });
   Auth.onChange(()=>{
     const pg = document.body.dataset.page;
     if(pg==="order") renderOrder();
     else if(pg==="cart") renderCart();
   });
   initScrollTop();
-  // Ẩn overlay loading sau khi trang đã dựng xong
-  requestAnimationFrame(hideAppLoader);
 });
