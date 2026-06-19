@@ -39,6 +39,33 @@ const C = {
   forest:"#3f5c46", maroon:"#6e2f33",
 };
 
+/* ---------- BẢNG MÀU CHUNG (admin quản lý qua tab "Màu sắc") ----------
+   Sản phẩm nên dùng màu từ list này thay vì gõ hex bừa. Khi admin sửa
+   bên tab Màu sắc, list được nạp lại từ DB (xem store-api.js listColors). */
+const COLORS = [
+  {key:"black",   name:"Đen",         hex:"#1c1c1c", sort:1,  active:true},
+  {key:"white",   name:"Trắng kem",   hex:"#f0ede6", sort:2,  active:true},
+  {key:"cream",   name:"Kem",         hex:"#e7ddca", sort:3,  active:true},
+  {key:"sand",    name:"Be cát",      hex:"#cbb89d", sort:4,  active:true},
+  {key:"navy",    name:"Xanh navy",   hex:"#2c3a4f", sort:5,  active:true},
+  {key:"sky",     name:"Xanh trời",   hex:"#a7c4db", sort:6,  active:true},
+  {key:"sage",    name:"Xanh sage",   hex:"#9fb088", sort:7,  active:true},
+  {key:"olive",   name:"Xanh olive",  hex:"#6f7445", sort:8,  active:true},
+  {key:"forest",  name:"Xanh rừng",   hex:"#3f5c46", sort:9,  active:true},
+  {key:"mustard", name:"Vàng mù tạt", hex:"#d8a441", sort:10, active:true},
+  {key:"brick",   name:"Cam gạch",    hex:"#b5523a", sort:11, active:true},
+  {key:"maroon",  name:"Đỏ rượu",     hex:"#6e2f33", sort:12, active:true},
+  {key:"pink",    name:"Hồng pastel", hex:"#e0b1b6", sort:13, active:true},
+  {key:"grey",    name:"Xám",         hex:"#b6b6b0", sort:14, active:true},
+];
+/* Tra cứu nhanh tên màu theo hex (case-insensitive) — dùng cho tooltip swatch */
+function colorName(hex){
+  if(!hex) return "";
+  const h = String(hex).toLowerCase();
+  const c = COLORS.find(x => x.hex.toLowerCase()===h);
+  return c ? c.name : hex;
+}
+
 /* ---------- DANH SÁCH SẢN PHẨM ---------- */
 const PRODUCTS = [
   // ÁO THUN
@@ -228,5 +255,70 @@ function getProduct(id){ return PRODUCTS.find(p=>p.id===id); }
 function byCategory(key){ return PRODUCTS.filter(p=>p.catKey===key); }
 function byCollection(name){ return PRODUCTS.filter(p=>p.collection===name); }
 
-window.STORE = { BRAND, CATEGORIES, COLLECTIONS, C, PRODUCTS,
-  formatVND, discountPct, productSVG, getProduct, byCategory, byCollection, slugify, safeColor };
+/* ---------- VALIDATE INLINE (dùng chung cho mọi form) ----------
+   Set/clear lỗi inline ngay dưới input — bao gọn trong .fld để bám layout
+   sẵn của form. Khi user gõ tiếp vào field, lỗi tự xoá. */
+function setFieldError(input, msg){
+  if(!input) return;
+  const fld = input.closest(".fld") || input.parentElement;
+  if(!fld) return;
+  fld.classList.toggle("has-error", !!msg);
+  let err = fld.querySelector(":scope > .fld-error");
+  if(msg){
+    if(!err){ err = document.createElement("div"); err.className = "fld-error"; fld.appendChild(err); }
+    err.textContent = msg;
+    // Tự xoá khi user gõ / thay đổi
+    if(!input._errBound){
+      input._errBound = true;
+      const clr = ()=> setFieldError(input,"");
+      input.addEventListener("input", clr);
+      input.addEventListener("change", clr);
+    }
+  } else if(err){ err.remove(); }
+}
+function clearFormErrors(form){
+  if(!form) return;
+  form.querySelectorAll(".fld.has-error").forEach(f=>f.classList.remove("has-error"));
+  form.querySelectorAll(".fld-error").forEach(e=>e.remove());
+}
+// Validate tổ hợp: [{el, msg, test?}] — test trả true nếu hợp lệ; nếu không có test thì check empty trim.
+function validateFields(items){
+  let firstBad=null;
+  for(const it of items){
+    const el = it.el; if(!el) continue;
+    const val = (el.value||"").trim();
+    const ok = it.test ? it.test(val) : !!val;
+    if(!ok){ setFieldError(el, it.msg); if(!firstBad) firstBad=el; }
+    else setFieldError(el, "");
+  }
+  if(firstBad){ try{ firstBad.focus({preventScroll:false}); firstBad.scrollIntoView({block:"center",behavior:"smooth"}); }catch(e){} }
+  return !firstBad;
+}
+
+/* ---------- CONFIRM DIALOG (styled — thay window.confirm) ----------
+   Trả Promise<boolean>. Dùng cho mọi action xoá / ẩn / hiện cần xác nhận. */
+function confirmDialog({title="Xác nhận", body="", confirmText="Xác nhận", cancelText="Huỷ", danger=false}={}){
+  return new Promise(resolve=>{
+    const ov = document.createElement("div");
+    ov.className = "modal-overlay";
+    ov.id = "confirmDialog_"+Date.now();
+    ov.innerHTML = `<div class="modal" style="max-width:400px">
+      <h3 class="modal-title">${title}</h3>
+      <div class="confirm-body" style="font-size:14px;line-height:1.55;color:var(--ink-soft);margin-bottom:6px">${body}</div>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" data-act="cancel" style="flex:1">${cancelText}</button>
+        <button type="button" class="btn ${danger?"btn-danger":"btn-dark"}" data-act="ok" style="flex:1" autofocus>${confirmText}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    requestAnimationFrame(()=>ov.classList.add("show"));
+    const done = (val)=>{ ov.classList.remove("show"); setTimeout(()=>ov.remove(),200); resolve(val); };
+    ov.querySelector("[data-act=ok]").onclick = ()=>done(true);
+    ov.querySelector("[data-act=cancel]").onclick = ()=>done(false);
+    ov.addEventListener("click", e=>{ if(e.target===ov) done(false); });
+    setTimeout(()=>{ const ok=ov.querySelector("[data-act=ok]"); if(ok) ok.focus(); }, 80);
+  });
+}
+
+window.STORE = { BRAND, CATEGORIES, COLLECTIONS, COLORS, C, PRODUCTS,
+  formatVND, discountPct, productSVG, getProduct, byCategory, byCollection, slugify, safeColor, colorName };

@@ -318,7 +318,10 @@ const HAS_HOVER = typeof window.matchMedia==="function" ? window.matchMedia("(ho
 function productCard(p){
   if(!p || !p.id){ console.warn("productCard: SP thiếu id, bỏ qua:", p); return ""; }
   const off = S.discountPct(p.price, p.compare);
-  const swatches = (p.colors||[]).slice(0,4).map((c,i)=>`<button type="button" class="swatch${i===0?' active':''}" data-c="${escapeXML(c)}" data-id="${p.id}" style="background:${safeColor(c)}" aria-label="Màu ${escapeXML(c)}"></button>`).join("");
+  const swatches = (p.colors||[]).slice(0,4).map((c,i)=>{
+    const name = S.colorName ? S.colorName(c) : c;
+    return `<button type="button" class="swatch${i===0?' active':''}" data-c="${escapeXML(c)}" data-id="${p.id}" style="background:${safeColor(c)}" aria-label="Màu ${escapeXML(name)}" title="${escapeXML(name)}"></button>`;
+  }).join("");
   const url = `product.html?id=${encodeURIComponent(p.id)}`;
   const soldOut = (p.stock!=null && p.stock<=0);
   const ci0 = (p.color_images||{})[p.colors[0]];
@@ -482,12 +485,8 @@ function renderHeader(){
     return `<li class="${mega?'has-mega':''}"><a href="${n.href}">${n.label}</a>${mega}</li>`;
   }).join("");
 
-  const annItems = `
-    <span>🚚 Miễn phí giao hàng cho đơn từ 500.000₫</span>
-    <span>⚡ Sale tới 50% toàn bộ sản phẩm</span>
-    <span>↩ Đổi trả miễn phí trong 7 ngày</span>
-    <span>✨ Hàng mới về mỗi tuần</span>
-    <span>💬 Hỗ trợ tư vấn 24/7</span>`;
+  const annList = (Home.get().tickerHeader && Home.get().tickerHeader.length) ? Home.get().tickerHeader : Home.defaults.tickerHeader;
+  const annItems = annList.map(t=>`<span>${escapeXML(t)}</span>`).join("");
   const ann = `<div class="announce"><div class="track">${Array(4).fill(annItems).join("")}</div></div>`;
 
   const icon = (d)=>`<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -559,11 +558,11 @@ function renderHeader(){
 function openSearchModal(){
   if($("#searchModal")) return;
   const ov=document.createElement("div"); ov.className="modal-overlay"; ov.id="searchModal";
-  ov.innerHTML=`<div class="modal" style="max-width:560px;padding:22px">
+  ov.innerHTML=`<div class="modal" style="max-width:560px">
     <button class="modal-close" id="schClose" aria-label="Đóng">×</button>
-    <h3 class="modal-title" style="margin-bottom:14px">Tìm kiếm sản phẩm</h3>
+    <h3 class="modal-title">Tìm kiếm sản phẩm</h3>
     <input id="schInput" type="search" placeholder="Tên áo, slogan, bộ sưu tập…" autocomplete="off" style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:15px;outline:none">
-    <div id="schResults" style="margin-top:14px;max-height:50vh;overflow-y:auto"></div>
+    <div id="schResults" style="margin-top:14px"></div>
   </div>`;
   document.body.appendChild(ov);
   requestAnimationFrame(()=>ov.classList.add("show"));
@@ -661,7 +660,7 @@ function renderFooter(){
     <div class="foot-grid">
       <div>
         <div class="logo">${S.BRAND.name}<span class="dot">.</span></div>
-        <p style="max-width:260px;color:#b9b9b9">${S.BRAND.tagline}. Thời trang local brand cho người trẻ dám khác biệt.</p>
+        <p style="max-width:260px;color:#b9b9b9">${escapeXML(Home.get().footerAbout || (S.BRAND.tagline+". Thời trang local brand cho người trẻ dám khác biệt."))}</p>
         <div class="socials">
           <a href="#" aria-label="Facebook">f</a>
           <a href="#" aria-label="Instagram">◎</a>
@@ -697,14 +696,18 @@ function scrollerRow(products){
     <button class="scroll-btn next">›</button>
   </div>`;
 }
-function featureBlock({eyebrow,title,sub,cta,href,color,products,reverse}){
-  const banner = `<a class="feature-banner" href="${href}" style="background:linear-gradient(135deg,${color[0]},${color[1]})">
-      <div class="label"><div class="eyebrow">${eyebrow}</div><h3>${title}</h3>
-      <span class="btn btn-light">${cta}</span></div></a>`;
+function featureBlock(b){
+  const {eyebrow,title,sub,cta,href,products,reverse,image,from,to} = b;
+  const bg = image
+    ? `background:linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.35)),url('${escapeXML(image)}') center/cover no-repeat`
+    : `background:linear-gradient(135deg,${safeColor(from||"#1d1d1d")},${safeColor(to||"#444")})`;
+  const banner = `<a class="feature-banner" href="${escapeXML(href||"#")}" style="${bg}">
+      <div class="label"><div class="eyebrow">${escapeXML(eyebrow||"")}</div><h3>${escapeXML(title||"")}</h3>
+      <span class="btn btn-light">${escapeXML(cta||"")}</span></div></a>`;
   const copy = `<div class="feature-copy" style="width:100%">
       <div style="margin-bottom:14px"><div class="section-head" style="margin-bottom:6px"><div>
-        <div class="eyebrow" style="color:var(--sale);font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:600">${sub}</div>
-        <h2 style="font-family:var(--font-display);text-transform:uppercase;font-size:clamp(22px,2.6vw,30px)">${title}</h2>
+        <div class="eyebrow" style="color:var(--sale);font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:600">${escapeXML(sub||"")}</div>
+        <h2 style="font-family:var(--font-display);text-transform:uppercase;font-size:clamp(22px,2.6vw,30px)">${escapeXML(title||"")}</h2>
       </div></div></div>
       ${scrollerRow(products)}</div>`;
   return `<div class="feature ${reverse?'rev':''}">${reverse?copy+banner:banner+copy}</div>`;
@@ -712,39 +715,56 @@ function featureBlock({eyebrow,title,sub,cta,href,color,products,reverse}){
 
 function renderHome(){
   const root = $("#page");
-  const blocks = [
-    {eyebrow:"Signature",     title:"Relaxed Fit",   sub:"Bán chạy nhất", cta:"Khám phá", href:"collection.html?cat=ao-thun", color:["#1d1d1d","#444"], products:S.byCollection("Coffee Club").concat(S.byCategory("ao-thun")).slice(0,8)},
-    {eyebrow:"Aesthetic",     title:"Ringer Tee",    sub:"Phong cách cổ điển", cta:"Mua ngay", href:"collection.html?cat=ringer", color:["#2c3a4f","#5b7da0"], products:S.byCategory("ringer").concat(S.byCollection("Ocean Calling")).slice(0,8), reverse:true},
-    {eyebrow:"Pure comfort",  title:"Polo Relaxed",  sub:"Lịch sự mà thoải mái", cta:"Khám phá", href:"collection.html?cat=polo", color:["#3f5c46","#6f7445"], products:S.byCategory("polo").concat(S.byCollection("Old Money")).slice(0,8)},
-    {eyebrow:"New drop",      title:"Tank Top",      sub:"Hè 2026", cta:"Khám phá", href:"collection.html?cat=ba-lo", color:["#b5523a","#d8a441"], products:S.byCategory("ba-lo").slice(0,8), reverse:true},
-    {eyebrow:"Everyday",      title:"Hoodie & Sweater", sub:"Ấm áp mỗi ngày", cta:"Khám phá", href:"collection.html?cat=hoodie", color:["#2c3a4f","#1c1c1c"], products:S.byCategory("hoodie").concat(S.byCategory("sweater")).slice(0,8)},
-  ];
+  // Blocks từ Home settings — admin custom, fallback defaults. Products derived
+  // tự động theo catKey/collection của từng block.
+  const HBlocks = (Home.get().featureBlocks && Home.get().featureBlocks.length) ? Home.get().featureBlocks : Home.defaults.featureBlocks;
+  const blocks = HBlocks.map(b=>{
+    let products = [];
+    if(b.collection) products = products.concat(S.byCollection(b.collection));
+    if(b.catKey)     products = products.concat(S.byCategory(b.catKey));
+    // Dedup theo id
+    const seen = new Set();
+    products = products.filter(p=>p&&p.id&&!seen.has(p.id)&&seen.add(p.id)).slice(0,8);
+    return {...b, products};
+  }).filter(b=>b.products.length); // bỏ block không có SP nào
 
-  const hero = `<section class="hero">
+  // Hero — đọc từ Home settings; nếu admin set heroImage thì dùng cover image, fallback gradient.
+  const HG = Home.get();
+  const heroSub = HG.heroSub || `${S.BRAND.name} — local brand streetwear cho người trẻ dám thể hiện chất riêng.`;
+  const heroStyle = HG.heroImage ? `style="background:linear-gradient(rgba(0,0,0,.35),rgba(0,0,0,.35)),url('${escapeXML(HG.heroImage)}') center/cover no-repeat"` : "";
+  const tickerBottomItems = (HG.tickerBottom && HG.tickerBottom.length ? HG.tickerBottom : Home.defaults.tickerBottom)
+    .map(t=>`<span>${escapeXML(t)}</span>`).join("");
+  const hero = `<section class="hero" ${heroStyle}>
     <div class="hero-inner">
-      <h1>Be Bold.<br>Be New.<br>Be <em>Original.</em></h1>
-      <p>${S.BRAND.name} — local brand streetwear cho người trẻ dám thể hiện chất riêng.</p>
-      <a class="btn btn-light" href="collection.html">Khám phá bộ sưu tập</a>
+      <h1>${HG.heroHeadline || Home.defaults.heroHeadline}</h1>
+      <p>${escapeXML(heroSub)}</p>
+      <a class="btn btn-light" href="${escapeXML(HG.heroCtaHref || "collection.html")}">${escapeXML(HG.heroCta || "Khám phá bộ sưu tập")}</a>
     </div>
-    <div class="ticker"><div class="track">${Array(6).fill(`<span>★ FREESHIP 500K</span><span>★ SALE 50%</span><span>★ NEW ARRIVALS</span><span>★ ${S.BRAND.tagline.toUpperCase()}</span>`).join("")}</div></div>
+    <div class="ticker"><div class="track">${Array(6).fill(tickerBottomItems).join("")}</div></div>
   </section>`;
 
+  // Danh mục nổi bật — admin có thể custom ảnh nền từng tile, fallback gradient mặc định.
+  const defaultTiles = [["ao-thun","#1d1d1d","#555"],["hoodie","#2c3a4f","#557"],["polo","#3f5c46","#697"],["tote","#b5523a","#d8a441"]];
   const cats = `<section class="section tight"><div class="wrap">
     <div class="section-head"><div><div class="eyebrow">Mua theo danh mục</div><h2>Danh mục nổi bật</h2></div>
       <a class="more" href="collection.html">Tất cả</a></div>
     <div class="cats">
-      ${[["ao-thun","#1d1d1d","#555"],["hoodie","#2c3a4f","#557"],["polo","#3f5c46","#697"],["tote","#b5523a","#d8a441"]]
-        .map(([k,a,b])=>{const c=S.CATEGORIES.find(x=>x.key===k);
-          return `<a class="cat-tile" href="collection.html?cat=${k}" style="background:linear-gradient(135deg,${a},${b})"><span>${c.name}</span></a>`}).join("")}
+      ${defaultTiles.map(([k,a,b])=>{
+        const cat=S.CATEGORIES.find(x=>x.key===k); if(!cat) return "";
+        const tile = Home.tile(k);
+        const bg = tile && tile.image
+          ? `background:linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.35)),url('${escapeXML(tile.image)}') center/cover no-repeat`
+          : `background:linear-gradient(135deg,${safeColor(tile&&tile.from||a)},${safeColor(tile&&tile.to||b)})`;
+        return `<a class="cat-tile" href="collection.html?cat=${k}" style="${bg}"><span>${escapeXML(cat.name)}</span></a>`;
+      }).join("")}
     </div></div></section>`;
 
-  const strip = `<div class="strip"><div class="track">${Array(8).fill(`<span>${S.BRAND.name}</span><span class="star">✦</span><span>${S.BRAND.tagline.toUpperCase()}</span><span class="star">✦</span>`).join("")}</div></div>`;
+  const stripText = HG.stripText || S.BRAND.tagline.toUpperCase();
+  const strip = `<div class="strip"><div class="track">${Array(8).fill(`<span>${escapeXML(S.BRAND.name)}</span><span class="star">✦</span><span>${escapeXML(stripText)}</span><span class="star">✦</span>`).join("")}</div></div>`;
 
+  const perkItems = HG.perks && HG.perks.length ? HG.perks : Home.defaults.perks;
   const perks = `<section class="section tight"><div class="wrap"><div class="perks">
-    <div class="perk"><div class="ic">🚚</div><h5>Freeship 500K</h5><p>Toàn quốc cho đơn từ 500.000₫</p></div>
-    <div class="perk"><div class="ic">↩</div><h5>Đổi trả 7 ngày</h5><p>Đổi size, đổi mẫu dễ dàng</p></div>
-    <div class="perk"><div class="ic">✓</div><h5>Chất liệu cao cấp</h5><p>Cotton 100% form relaxed</p></div>
-    <div class="perk"><div class="ic">💬</div><h5>Hỗ trợ 24/7</h5><p>Nhắn tin là có phản hồi</p></div>
+    ${perkItems.map(p=>`<div class="perk"><div class="ic">${escapeXML(p.icon||"")}</div><h5>${escapeXML(p.title||"")}</h5><p>${escapeXML(p.desc||"")}</p></div>`).join("")}
   </div></div></section>`;
 
   root.innerHTML = hero + cats +
@@ -757,10 +777,12 @@ function renderHome(){
 
 /* ---------------- NEWSLETTER ---------------- */
 function newsletterHTML(){
+  const H = Home.get();
   return `<section class="newsletter"><div class="wrap">
-    <h2>Đăng ký nhận ưu đãi</h2>
-    <p>Nhập email để nhận mã giảm giá, quà tặng và tin sản phẩm mới nhất.</p>
-    <form class="subscribe" id="nl"><input type="email" placeholder="Email của bạn" required>
+    <h2>${escapeXML(H.newsletterTitle || Home.defaults.newsletterTitle)}</h2>
+    <p>${escapeXML(H.newsletterSub || Home.defaults.newsletterSub)}</p>
+    <form class="subscribe" id="nl" style="align-items:flex-start" novalidate>
+      <div class="fld" style="flex:1;margin:0"><input id="nlEmail" type="email" placeholder="Email của bạn" required></div>
       <button class="btn btn-dark" type="submit">Đăng ký</button></form>
   </div></section>`;
 }
@@ -768,6 +790,9 @@ function bindNewsletter(){
   const f=$("#nl"); if(!f) return;
   f.onsubmit=e=>{
     e.preventDefault();
+    const inp=$("#nlEmail");
+    const ok = validateFields([{el:inp, msg:"Email không hợp lệ", test:v=> isValidEmail(v)}]);
+    if(!ok) return;
     const btn=f.querySelector("button[type=submit]");
     if(btn && btn.disabled) return;
     if(btn){ btn.disabled=true; setTimeout(()=>{ btn.disabled=false; }, 1500); }
@@ -924,8 +949,13 @@ function openSizeGuide(catKey){
   $("#sgClose").onclick=close; ov.addEventListener("click",e=>{ if(e.target===ov) close(); });
   const go=$("#sgGo");
   if(go) go.onclick=()=>{
-    const h=+$("#sgH").value, w=+$("#sgW").value;
-    if(!h||!w){ toast("Nhập chiều cao và cân nặng"); return; }
+    const hEl=$("#sgH"), wEl=$("#sgW");
+    const ok = validateFields([
+      {el:hEl, msg:"Nhập chiều cao (cm)", test:v=> +v>=100 && +v<=220},
+      {el:wEl, msg:"Nhập cân nặng (kg)",  test:v=> +v>=25  && +v<=200},
+    ]);
+    if(!ok) return;
+    const h=+hEl.value, w=+wEl.value;
     const s=suggestSize(h,w);
     $$(".sg-table tbody tr").forEach(tr=>tr.classList.toggle("hl", tr.dataset.size===s.size));
     const onPDP = !!document.querySelector(`#sizes .size-btn[data-s="${s.size}"]`);
@@ -1070,22 +1100,30 @@ async function renderProduct(){
   renderThumbs(); restartAuto();
   $("#gPrev").onclick=()=>{ showSlide(slideIdx-1); restartAuto(); };
   $("#gNext").onclick=()=>{ showSlide(slideIdx+1); restartAuto(); };
-  // colors → đổi gallery sang ảnh của màu đó
+  // colors → đổi gallery sang ảnh của màu đó + hiện tên màu cạnh label
+  const setColorName = (c)=>{ const el=$("#colorName"); if(el) el.textContent = S.colorName ? " · "+S.colorName(c) : ""; };
+  setColorName(color);
   $$("#colors .color-dot").forEach(b=> b.onclick=()=>{
     $$("#colors .color-dot").forEach(x=>x.classList.remove("active"));
-    b.classList.add("active"); setColor(b.dataset.c);
+    b.classList.add("active"); setColor(b.dataset.c); setColorName(b.dataset.c);
   });
-  // sizes
+  // sizes — chọn size; nếu đang có lỗi inline thì xoá luôn
   $$("#sizes .size-btn").forEach(b=> b.onclick=()=>{
     $$("#sizes .size-btn").forEach(x=>x.classList.remove("active"));
     b.classList.add("active"); size=b.dataset.s;
+    const oe=$("#sizesErr"); if(oe) oe.remove();
   });
   // qty
   $("#minus").onclick=()=>{qty=Math.max(1,qty-1);$("#qval").textContent=qty};
   $("#plus").onclick=()=>{qty++;$("#qval").textContent=qty};
   // add / buy
   function doAdd(){
-    if(!size){ toast("Vui lòng chọn size"); return false; }
+    if(!size){
+      let oe=$("#sizesErr");
+      if(!oe){ oe=document.createElement("div"); oe.id="sizesErr"; oe.className="opt-error"; oe.textContent="Vui lòng chọn size"; $("#sizes").parentNode.insertBefore(oe, $("#sizes").nextSibling); }
+      $("#sizes").scrollIntoView({block:"center",behavior:"smooth"});
+      return false;
+    }
     if(p.stock!=null && qty>p.stock){ toast("Chỉ còn "+p.stock+" sản phẩm"); return false; }
     Cart.add({id:p.id,name:p.name,price:p.price,color,size,qty});
     return true;
@@ -1178,20 +1216,22 @@ function openCheckout(){
     <button class="modal-close" id="ckClose" aria-label="Đóng">×</button>
     <h3 class="modal-title">Thông tin đặt hàng</h3>
     ${accountInfo}
-    <form id="ckForm" novalidate>
+    <form id="ckForm" novalidate autocomplete="on">
       <label class="fld"><span>Họ và tên *</span><input name="name" required value="${escapeXML(prefillName)}"></label>
       <label class="fld"><span>Số điện thoại *</span><input name="phone" required inputmode="tel" value="${escapeXML(prefillPhone)}"></label>
       <label class="fld"><span>Email *</span><input name="email" type="email" required inputmode="email" autocomplete="email" placeholder="ban@example.com" value="${escapeXML(prefillEmail)}">
         <small class="muted" style="font-size:12px;display:block;margin-top:4px">${emailHint}</small></label>
       <label class="fld"><span>Địa chỉ nhận hàng *</span><textarea name="address" rows="2" required>${escapeXML(prefillAddress)}</textarea></label>
       <label class="fld"><span>Ghi chú (tuỳ chọn)</span><input name="note"></label>
-      <div class="ck-summary">
-        <div class="line"><span>Tạm tính</span><span>${money(sub)}</span></div>
-        <div class="line"><span>Giao hàng</span><span>${ship?money(ship):"Miễn phí"}</span></div>
-        <div class="total"><span>Tổng cộng</span><span>${money(total)}</span></div>
+      <div class="modal-foot">
+        <div class="ck-summary">
+          <div class="line"><span>Tạm tính</span><span>${money(sub)}</span></div>
+          <div class="line"><span>Giao hàng</span><span>${ship?money(ship):"Miễn phí"}</span></div>
+          <div class="total"><span>Tổng cộng</span><span>${money(total)}</span></div>
+        </div>
+        <button class="btn btn-dark btn-block" type="submit" id="ckSubmit">Đặt hàng (COD)</button>
+        <p class="muted" style="font-size:12px;text-align:center;margin-top:8px">Thanh toán khi nhận hàng • ${DB.cloud?"Đơn lưu trên hệ thống":"Chế độ demo (lưu trên máy)"}</p>
       </div>
-      <button class="btn btn-dark btn-block" type="submit" id="ckSubmit">Đặt hàng (COD)</button>
-      <p class="muted" style="font-size:12px;text-align:center;margin-top:8px">Thanh toán khi nhận hàng • ${DB.cloud?"Đơn lưu trên hệ thống":"Chế độ demo (lưu trên máy)"}</p>
     </form>
   </div>`;
   document.body.appendChild(ov);
@@ -1205,8 +1245,13 @@ function openCheckout(){
     const f=e.target;
     const name=f.name.value.trim(), phone=f.phone.value.trim(),
           email=f.email.value.trim(), address=f.address.value.trim();
-    if(!name||!phone||!address||!email){ toast("Vui lòng điền đủ tên, SĐT, email, địa chỉ"); return; }
-    if(!isValidEmail(email)){ toast("Email không hợp lệ"); f.email.focus(); return; }
+    const ok = validateFields([
+      {el:f.name,    msg:"Vui lòng nhập họ tên"},
+      {el:f.phone,   msg:"Vui lòng nhập số điện thoại", test:v=> /^[0-9+\-\s().]{8,}$/.test(v)},
+      {el:f.email,   msg:"Email không hợp lệ", test:v=> isValidEmail(v)},
+      {el:f.address, msg:"Vui lòng nhập địa chỉ giao hàng"},
+    ]);
+    if(!ok) return;
     const btn=$("#ckSubmit"); btn.disabled=true; btn.textContent="Đang xử lý...";
     const order={ customer_name:name, phone, email, address, note:f.note.value.trim(),
       items:Cart.items.map(x=>{ const p=S.getProduct(x.id);
@@ -1334,8 +1379,8 @@ async function renderOrder(){
       ${accountBlock}
       <h3 style="font-family:var(--font-display);text-transform:uppercase;font-size:16px;margin:28px 0 12px">Tra cứu bằng mã đơn</h3>
       <p class="muted" style="margin-bottom:12px;font-size:13.5px">Dùng cho đơn đặt khi chưa đăng nhập (đã in trên màn hình sau khi đặt).</p>
-      <form id="lookup" class="subscribe" style="max-width:none;margin:0 0 24px">
-        <input id="codeInput" placeholder="Nhập mã đơn, ví dụ OR1A2B3" required>
+      <form id="lookup" class="subscribe" style="max-width:none;margin:0 0 24px;align-items:flex-start">
+        <div class="fld" style="flex:1;margin:0"><input id="codeInput" placeholder="Nhập mã đơn, ví dụ OR1A2B3" required></div>
         <button class="btn btn-dark" type="submit">Tra cứu</button>
       </form>
       ${recentBlock}
@@ -1344,8 +1389,9 @@ async function renderOrder(){
       e.preventDefault();
       const btn=e.target.querySelector("button[type=submit]");
       if(btn && btn.disabled) return;
-      const c=$("#codeInput").value.trim();
-      if(!c) return;
+      const inp=$("#codeInput"), c=inp.value.trim();
+      if(!c){ setFieldError(inp, "Vui lòng nhập mã đơn"); inp.focus(); return; }
+      setFieldError(inp,"");
       if(btn){ btn.disabled=true; btn.textContent="Đang chuyển…"; }
       location.href="order.html?code="+encodeURIComponent(c);
     };
@@ -1418,6 +1464,64 @@ const Categories = { loaded:false, async load(){
   this.loaded=true;
 }};
 
+/* ---------------- COLORS ---------------- */
+const Colors = { loaded:false, async load(){
+  try{ const rows=await DB.listColors(); if(rows&&rows.length) S.COLORS.splice(0,S.COLORS.length,...rows); }
+  catch(e){ console.warn("Colors.load",e); }
+  this.loaded=true;
+}};
+
+/* ---------------- HOME SETTINGS (admin tự custom) ----------------
+   `Home.get()` luôn trả object có đủ field — thiếu thì fallback defaults.
+   Admin lưu vào key "home" qua DB.saveSettings, load lúc boot. */
+const Home = {
+  data: null,
+  defaults: {
+    tickerHeader: [
+      "🚚 Miễn phí giao hàng cho đơn từ 500.000₫",
+      "⚡ Sale tới 50% toàn bộ sản phẩm",
+      "↩ Đổi trả miễn phí trong 7 ngày",
+      "✨ Hàng mới về mỗi tuần",
+      "💬 Hỗ trợ tư vấn 24/7",
+    ],
+    tickerBottom: ["★ FREESHIP 500K","★ SALE 50%","★ NEW ARRIVALS"],
+    heroHeadline: "Be Bold.<br>Be New.<br>Be <em>Original.</em>",
+    heroSub: "",
+    heroCta: "Khám phá bộ sưu tập",
+    heroCtaHref: "collection.html",
+    heroImage: "",
+    catTiles: [],
+    perks: [
+      {icon:"🚚", title:"Freeship 500K", desc:"Toàn quốc cho đơn từ 500.000₫"},
+      {icon:"↩",  title:"Đổi trả 7 ngày", desc:"Đổi size, đổi mẫu dễ dàng"},
+      {icon:"✓",  title:"Chất liệu cao cấp", desc:"Cotton 100% form relaxed"},
+      {icon:"💬", title:"Hỗ trợ 24/7", desc:"Nhắn tin là có phản hồi"},
+    ],
+    stripText: "",
+    newsletterTitle: "Đăng ký nhận ưu đãi",
+    newsletterSub: "Nhập email để nhận mã giảm giá, quà tặng và tin sản phẩm mới nhất.",
+    footerAbout: "",
+    featureBlocks: [
+      {eyebrow:"Signature",     title:"Relaxed Fit",      sub:"Bán chạy nhất",       cta:"Khám phá", href:"collection.html?cat=ao-thun", from:"#1d1d1d", to:"#444",    image:"", catKey:"ao-thun", collection:"Coffee Club",  reverse:false},
+      {eyebrow:"Aesthetic",     title:"Ringer Tee",       sub:"Phong cách cổ điển",  cta:"Mua ngay", href:"collection.html?cat=ringer",  from:"#2c3a4f", to:"#5b7da0", image:"", catKey:"ringer",  collection:"Ocean Calling",reverse:true},
+      {eyebrow:"Pure comfort",  title:"Polo Relaxed",     sub:"Lịch sự mà thoải mái",cta:"Khám phá", href:"collection.html?cat=polo",    from:"#3f5c46", to:"#6f7445", image:"", catKey:"polo",    collection:"Old Money",    reverse:false},
+      {eyebrow:"New drop",      title:"Tank Top",         sub:"Hè 2026",             cta:"Khám phá", href:"collection.html?cat=ba-lo",   from:"#b5523a", to:"#d8a441", image:"", catKey:"ba-lo",   collection:"",             reverse:true},
+      {eyebrow:"Everyday",      title:"Hoodie & Sweater", sub:"Ấm áp mỗi ngày",      cta:"Khám phá", href:"collection.html?cat=hoodie",  from:"#2c3a4f", to:"#1c1c1c", image:"", catKey:"hoodie",  collection:"",             reverse:false},
+    ],
+  },
+  get(){ return this.data || this.defaults; },
+  tile(catKey){
+    const tiles = this.get().catTiles || [];
+    return tiles.find(t=>t.key===catKey) || null;
+  },
+  async load(){
+    try{
+      const v = await DB.getSettings("home");
+      if(v && typeof v==="object") this.data = {...this.defaults, ...v};
+    }catch(e){ console.warn("Home.load",e); }
+  },
+};
+
 /* ---------------- CATALOG ---------------- */
 const Catalog = { loaded:false, async load(){
   try{ const rows=await DB.listProducts(); if(rows&&rows.length) S.PRODUCTS.splice(0,S.PRODUCTS.length,...rows); }
@@ -1456,7 +1560,7 @@ function initScrollTop(){
 document.addEventListener("DOMContentLoaded", async ()=>{
   showAppLoader();
   // Danh mục phải nạp trước (vì map sản phẩm cần tên/type danh mục)
-  await Promise.all([Categories.load(), Auth.init()]);
+  await Promise.all([Categories.load(), Colors.load(), Home.load(), Auth.init()]);
   await Catalog.load();
   renderHeader();
   renderFooter();

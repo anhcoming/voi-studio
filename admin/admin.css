@@ -59,7 +59,7 @@ table.tbl tr:hover td{background:#fafafa}
 .fld select:focus,.statusSelect:focus,.admin-actions select:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 3px rgba(16,16,16,.06)}
 .statusSelect{padding:8px 32px 8px 12px;border-radius:20px;font-size:12.5px;font-weight:600;min-height:auto;width:auto;background-size:10px 7px;background-position:right 12px center}
 .admin-actions select{width:auto;min-width:180px}
-.mini{font-size:12.5px;border:1.5px solid var(--line);border-radius:20px;padding:6px 12px;font-weight:600}
+.mini{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;border:1.5px solid var(--line);border-radius:20px;padding:6px 12px;font-weight:600;cursor:pointer;background:#fff;color:var(--ink);text-decoration:none;font-family:inherit;line-height:1.2;transition:.15s}
 .mini:hover{border-color:var(--ink)}
 .mini.danger{color:var(--sale);border-color:#f0c5c5}
 .mini.danger:hover{background:var(--sale);color:#fff;border-color:var(--sale)}
@@ -105,6 +105,64 @@ table.tbl tr:hover td{background:#fafafa}
 .variant{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px;background:#fff}
 .variant-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
 .variant-head .vcolor{width:30px;height:30px;border:1px solid var(--line);border-radius:8px;padding:0;background:none;cursor:pointer;flex-shrink:0}
+.vpalette .vswatch{width:24px;height:24px;border-radius:50%;border:1.5px solid rgba(0,0,0,.12);cursor:pointer;padding:0;transition:transform .12s ease,border-color .15s ease,box-shadow .15s ease}
+.vpalette .vswatch:hover{transform:scale(1.08)}
+.vpalette .vswatch.on{border-color:var(--ink);box-shadow:0 0 0 2px #fff,0 0 0 4px var(--ink)}
+
+/* ========== Home preview (admin "Trang chủ" tab) ========== */
+.home-preview{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
+.home-preview .hp-zone{position:relative;transition:outline-color .15s ease}
+.home-preview .hp-zone{outline:2px dashed transparent;outline-offset:-2px}
+.home-preview .hp-zone:hover{outline-color:#e02424}
+.home-preview .hp-edit{
+  position:absolute;top:10px;right:10px;z-index:5;
+  padding:7px 14px;font-size:12.5px;font-weight:700;letter-spacing:.02em;
+  background:#e02424;color:#fff;border:none;border-radius:20px;cursor:pointer;
+  opacity:0;transform:translateY(-4px);transition:opacity .15s ease,transform .15s ease;
+  box-shadow:0 4px 12px rgba(224,36,36,.35);
+}
+.home-preview .hp-edit.hp-edit-2{top:auto;bottom:10px;right:10px}
+.home-preview .hp-zone:hover .hp-edit{opacity:1;transform:translateY(0)}
+.home-preview .hp-edit:hover{background:#b71d1d}
+
+/* Tile có nút Sửa riêng — không dính outline của zone */
+.home-preview .hp-tile-wrap{position:relative;display:flex}
+.home-preview .hp-tile-wrap{outline:2px dashed transparent;outline-offset:-2px;border-radius:14px;transition:outline-color .15s ease}
+.home-preview .hp-tile-wrap:hover{outline-color:#e02424}
+.home-preview .hp-tile-wrap .cat-tile{flex:1}
+.home-preview .hp-tile-wrap .hp-edit{top:10px;right:10px}
+.home-preview .hp-tile-wrap:hover .hp-edit{opacity:1;transform:translateY(0)}
+
+/* Ngắt hover phụ huynh khi hover tile (tránh hiện 2 outline) */
+.home-preview .hp-zone[data-zone="tiles"]:hover{outline-color:transparent}
+
+/* Disable interactive links bên trong preview để không nhảy trang */
+.home-preview a{pointer-events:none}
+.home-preview a.cat-tile,.home-preview .hp-edit{pointer-events:auto}
+
+/* Placeholder card cho preview product rows */
+.home-preview .hp-pcard{flex:0 0 220px;border:1px solid #eee;border-radius:14px;overflow:hidden;background:#fff}
+.home-preview .hp-pcard .thumb{aspect-ratio:4/5;background:#f4f1ec}
+.home-preview .hp-pcard .info{padding:12px}
+.home-preview .hp-pcard .cat{font-size:10px;letter-spacing:.12em;color:#999;margin-bottom:4px}
+.home-preview .hp-pcard .name{font-size:13px;font-weight:500;color:#333;height:36px;overflow:hidden}
+
+/* Disable interactive nội tại trong preview newsletter/subscribe */
+.home-preview .subscribe input,.home-preview .subscribe button{pointer-events:none}
+
+/* Cụm action trên feature block (Sửa / ↑ / ↓ / 🗑) */
+.home-preview .hp-block-actions{
+  position:absolute;top:10px;right:10px;z-index:5;
+  display:flex;gap:6px;
+  opacity:0;transform:translateY(-4px);transition:opacity .15s ease,transform .15s ease;
+}
+.home-preview .hp-zone:hover .hp-block-actions{opacity:1;transform:translateY(0)}
+.home-preview .hp-block-actions .hp-edit{position:static;opacity:1;transform:none}
+.home-preview .hp-edit.hp-mini{padding:7px 10px;font-size:14px;min-width:36px}
+.home-preview .hp-edit.hp-mini:disabled{opacity:.4;cursor:not-allowed}
+.home-preview .hp-edit.hp-mini:disabled:hover{background:#e02424}
+.home-preview .hp-edit.hp-mini.hp-danger{background:#444}
+.home-preview .hp-edit.hp-mini.hp-danger:hover{background:#1c1c1c}
 .img-drop.vdrop{aspect-ratio:4/5;display:flex;align-items:center;justify-content:center;margin:0;padding:8px;font-size:12px;line-height:1.3}
 .sizebox{display:flex;gap:7px;flex-wrap:wrap}
 .sizebox label{display:flex;align-items:center;gap:5px;border:1.5px solid var(--line);border-radius:8px;padding:6px 11px;font-size:13px;cursor:pointer;font-weight:600}

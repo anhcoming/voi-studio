@@ -20,6 +20,10 @@ async function loadCats(){
   try{ const rows=await DB.listCategoriesAll(); if(rows&&rows.length) S.CATEGORIES.splice(0,S.CATEGORIES.length,...rows); }
   catch(e){ console.warn("loadCats",e); }
 }
+async function loadColors(){
+  try{ const rows=await DB.listColorsAll(); if(rows&&rows.length) S.COLORS.splice(0,S.COLORS.length,...rows); }
+  catch(e){ console.warn("loadColors",e); }
+}
 
 function thumb(p){
   if(p.image_url) return `<img src="${esc(p.image_url)}" alt="">`;
@@ -38,7 +42,7 @@ async function boot(){
   if(DB._loadAdminEmails) await DB._loadAdminEmails();
   const allowed = DB.isAdminAsync ? await DB.isAdminAsync(A.user) : DB.isAdmin(A.user);
   if(!A.user || !allowed){ renderLogin(A.user); return; }
-  await loadCats();
+  await Promise.all([loadCats(), loadColors()]);
   renderShell();
   switchTab(A.tab);
 }
@@ -53,7 +57,7 @@ function renderLogin(user){
     ${denied
       ? `<div class="notice err">Tài khoản <b>${esc(user.email)}</b> không có quyền admin.</div>
          <button class="gbtn" id="logoutBtn">Đăng xuất & thử tài khoản khác</button>`
-      : `<form id="pwForm" style="text-align:left">
+      : `<form id="pwForm" style="text-align:left" novalidate>
           <label class="fld"><span>Email admin</span><input name="email" type="email" value="${esc(adminEmail)}" required></label>
           <label class="fld"><span>Mật khẩu</span><input name="password" type="password" placeholder="••••••••" required></label>
           <button class="btn btn-dark btn-block" type="submit" id="pwBtn">Đăng nhập</button>
@@ -65,7 +69,13 @@ function renderLogin(user){
   </div></div>`;
   const pf=$("#pwForm");
   if(pf) pf.onsubmit=async(e)=>{
-    e.preventDefault(); const b=$("#pwBtn"); b.disabled=true; b.textContent="Đang đăng nhập…";
+    e.preventDefault();
+    const ok = validateFields([
+      {el:pf.email,    msg:"Email không hợp lệ", test:v=> /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)},
+      {el:pf.password, msg:"Nhập mật khẩu"},
+    ]);
+    if(!ok) return;
+    const b=$("#pwBtn"); b.disabled=true; b.textContent="Đang đăng nhập…";
     try{ await DB.signInPassword(pf.email.value, pf.password.value); boot(); }
     catch(err){ b.disabled=false; b.textContent="Đăng nhập"; toast("Đăng nhập thất bại: "+(err.message||err)); }
   };
@@ -94,6 +104,8 @@ function renderShell(){
     <button data-tab="orders">Đơn hàng</button>
     <button data-tab="products">Sản phẩm</button>
     <button data-tab="categories">Danh mục</button>
+    <button data-tab="colors">Màu sắc</button>
+    <button data-tab="home">Trang chủ</button>
   </div></div>
   <div class="admin-wrap" id="adminContent"></div>`;
   $("#logoutBtn").onclick=async()=>{ await DB.signOut(); if(!DB.cloud) boot(); };
@@ -102,17 +114,42 @@ function renderShell(){
 function switchTab(tab){
   A.tab=tab;
   $$(".admin-tabs button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  if(tab==="orders") renderOrders(); else if(tab==="categories") renderCategories(); else renderProducts();
+  if(tab==="orders") renderOrders();
+  else if(tab==="categories") renderCategories();
+  else if(tab==="colors") renderColors();
+  else if(tab==="home") renderHomeSettings();
+  else renderProducts();
 }
 
 /* ---------------- DANH MỤC ---------------- */
 let _cats=[];
+const _catTypeName = (t)=>(CAT_TYPES.find(x=>x[0]===t)||[t,t])[1];
 async function renderCategories(){
   const c=$("#adminContent");
   c.innerHTML=`<div class="empty-state">Đang tải danh mục…</div>`;
   _cats = await DB.listCategoriesAll();
   if(!_products.length){ try{ _products = await DB.listProducts({adminAll:true}); }catch(e){} }
-  const typeName = (t)=>(CAT_TYPES.find(x=>x[0]===t)||[t,t])[1];
+  drawCategories();
+}
+function categoryRowHTML(ct){
+  const count=_products.filter(p=>p.catKey===ct.key).length;
+  return `<tr data-ckey="${esc(ct.key)}">
+    <td style="font-variant-numeric:tabular-nums">${ct.sort||0}</td>
+    <td><b>${esc(ct.name)}</b></td>
+    <td><code style="font-size:12px;color:var(--muted)">${esc(ct.key)}</code></td>
+    <td>${esc(_catTypeName(ct.type))}</td>
+    <td>${count}</td>
+    <td><button type="button" class="switch ctoggle ${ct.active!==false?'on':''}" data-key="${esc(ct.key)}" aria-label="${ct.active!==false?'Đang hiện — bấm để ẩn':'Đang ẩn — bấm để hiện'}">
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+      <span class="switch-label">${ct.active!==false?"Hiện":"Ẩn"}</span>
+    </button></td>
+    <td style="white-space:nowrap">
+      <button class="mini cedit" data-key="${esc(ct.key)}">Sửa</button>
+      <button class="mini danger cdel" data-key="${esc(ct.key)}">Xoá</button>
+    </td></tr>`;
+}
+function drawCategories(){
+  const c=$("#adminContent");
   c.innerHTML=`
   <div class="admin-head"><h1>Danh mục (${_cats.length})</h1>
     <div class="admin-actions"><button class="btn btn-dark" id="addCat" style="padding:10px 18px">+ Thêm danh mục</button></div>
@@ -120,29 +157,58 @@ async function renderCategories(){
   <p class="muted" style="margin:-8px 0 18px;font-size:13.5px">Danh mục dùng để phân loại sản phẩm, hiển thị ở bộ lọc cửa hàng và form thêm sản phẩm. <b>Type</b> quyết định kiểu ảnh tự sinh (áo thun / hoodie / túi…).</p>
   ${_cats.length? `<div class="tablewrap"><table class="tbl">
     <thead><tr><th>Thứ tự</th><th>Tên danh mục</th><th>Mã (key)</th><th>Type</th><th>SP</th><th>Hiện</th><th></th></tr></thead>
-    <tbody>${_cats.map(ct=>{
-      const count=_products.filter(p=>p.catKey===ct.key).length;
-      return `<tr>
-      <td style="font-variant-numeric:tabular-nums">${ct.sort||0}</td>
-      <td><b>${esc(ct.name)}</b></td>
-      <td><code style="font-size:12px;color:var(--muted)">${esc(ct.key)}</code></td>
-      <td>${esc(typeName(ct.type))}</td>
-      <td>${count}</td>
-      <td><span class="pill ${ct.active!==false?'tag-on':'tag-off'}">${ct.active!==false?"Hiện":"Ẩn"}</span></td>
-      <td style="white-space:nowrap">
-        <button class="mini cedit" data-key="${esc(ct.key)}">Sửa</button>
-        <button class="mini danger cdel" data-key="${esc(ct.key)}">Xoá</button>
-      </td></tr>`;}).join("")}</tbody></table></div>`
+    <tbody>${_cats.map(categoryRowHTML).join("")}</tbody></table></div>`
     : `<div class="empty-state">Chưa có danh mục.</div>`}`;
+  bindCategoryRowActions();
+}
+function bindCategoryRowActions(){
   $("#addCat").onclick=()=>categoryModal(null);
   $$(".cedit").forEach(b=> b.onclick=()=>categoryModal(_cats.find(x=>x.key===b.dataset.key)));
+  $$(".ctoggle").forEach(sw=> sw.onclick=async()=>{
+    const ct=_cats.find(x=>x.key===sw.dataset.key); if(!ct) return;
+    const wasActive = ct.active!==false;
+    const used = (_products||[]).filter(p=>p.catKey===ct.key).length;
+    const ok = await confirmDialog({
+      title: wasActive ? "Ẩn danh mục?" : "Hiện danh mục?",
+      body: wasActive
+        ? `Danh mục "<b>${esc(ct.name)}</b>"${used?` (đang có ${used} sản phẩm)`:""} sẽ ẩn khỏi cửa hàng. Sản phẩm thuộc danh mục này có thể không hiển thị trong bộ lọc.`
+        : `Danh mục "<b>${esc(ct.name)}</b>" sẽ hiện lại trên cửa hàng.`,
+      confirmText: wasActive ? "Ẩn" : "Hiện",
+      danger: wasActive,
+    });
+    if(!ok) return;
+    sw.disabled=true;
+    try{
+      const saved = await DB.upsertCategory({...ct, active: !wasActive});
+      Object.assign(ct, saved || {}, {active: !wasActive});
+      // sync vào S.CATEGORIES để chỗ khác (form thêm SP) đọc đúng
+      const sc = S.CATEGORIES.find(x=>x.key===ct.key); if(sc) Object.assign(sc, {active: ct.active});
+      toast(wasActive?"Đã ẩn danh mục":"Đã hiện danh mục");
+      const tr = $(`tr[data-ckey="${CSS.escape(ct.key)}"]`);
+      if(tr){ tr.outerHTML = categoryRowHTML(ct); bindCategoryRowActions(); }
+      else drawCategories();
+    }catch(e){ toast("Lỗi: "+(e.message||e)); sw.disabled=false; }
+  });
   $$(".cdel").forEach(b=> b.onclick=async()=>{
     const ct=_cats.find(x=>x.key===b.dataset.key);
     const used=(_products||[]).filter(p=>p.catKey===b.dataset.key).length;
-    if(used){ if(!confirm(`Danh mục "${ct?.name}" đang có ${used} sản phẩm. Vẫn xoá? (sản phẩm sẽ mất danh mục)`)) return; }
-    else if(!confirm(`Xoá danh mục "${ct?.name}"?`)) return;
-    try{ await DB.deleteCategory(b.dataset.key); await loadCats(); toast("Đã xoá danh mục"); renderCategories(); }
-    catch(e){ toast("Lỗi: "+(e.message||e)); }
+    const ok = await confirmDialog({
+      title:"Xoá danh mục?",
+      body: used
+        ? `Danh mục "<b>${esc(ct?.name||"")}</b>" đang có <b>${used} sản phẩm</b>. Xoá sẽ làm các sản phẩm này mất danh mục.`
+        : `Danh mục "<b>${esc(ct?.name||"")}</b>" sẽ bị xoá vĩnh viễn.`,
+      confirmText:"Xoá", cancelText:"Huỷ", danger:true,
+    });
+    if(!ok) return;
+    try{
+      await DB.deleteCategory(b.dataset.key);
+      const idx = _cats.findIndex(x=>x.key===b.dataset.key);
+      if(idx>=0) _cats.splice(idx,1);
+      // Đồng bộ S.CATEGORIES luôn
+      const sidx = S.CATEGORIES.findIndex(x=>x.key===b.dataset.key);
+      if(sidx>=0) S.CATEGORIES.splice(sidx,1);
+      toast("Đã xoá danh mục"); drawCategories();
+    }catch(e){ toast("Lỗi: "+(e.message||e)); }
   });
 }
 
@@ -151,7 +217,7 @@ function categoryModal(ct){
   ct = ct || {key:"",name:"",type:"tee",sort:(_cats.length),active:true};
   const typeOpts = CAT_TYPES.map(([v,l])=>`<option value="${v}" ${ct.type===v?"selected":""}>${l}</option>`).join("");
   openModal(`<h3 class="modal-title">${editing?"Sửa":"Thêm"} danh mục</h3>
-    <form id="cform">
+    <form id="cform" novalidate>
       <label class="fld"><span>Tên danh mục *</span><input name="name" value="${esc(ct.name)}" required placeholder="VD: Áo Khoác"></label>
       <div class="frow">
         <label class="fld"><span>Mã key ${editing?'(không đổi)':'(tự tạo)'}</span><input name="key" value="${esc(ct.key)}" ${editing?'readonly style="background:var(--bg-soft)"':'placeholder="ao-khoac"'}></label>
@@ -162,20 +228,731 @@ function categoryModal(ct){
         <label class="fld" style="display:flex;align-items:center;gap:8px;flex-direction:row;align-self:end;padding-bottom:10px">
           <input type="checkbox" name="active" ${ct.active!==false?"checked":""} style="width:18px;height:18px"> <span style="margin:0">Hiển thị</span></label>
       </div>
-      <button class="btn btn-dark btn-block" type="submit" id="csave">${editing?"Lưu":"Thêm danh mục"}</button>
+      <div class="modal-foot">
+        <button class="btn btn-dark btn-block" type="submit" id="csave">${editing?"Lưu":"Thêm danh mục"}</button>
+      </div>
     </form>`);
   const nameInp=$("[name=name]"), keyInp=$("[name=key]");
   if(!editing) nameInp.oninput=()=>{ keyInp.value = S.slugify(nameInp.value); };
   $("#cform").onsubmit=async(e)=>{
     e.preventDefault(); const f=e.target;
-    const name=f.name.value.trim(); let key=(f.key.value.trim()||slugify(name));
-    if(!name||!key){ toast("Nhập tên danh mục"); return; }
-    if(!editing && _cats.some(c=>c.key===key)){ toast("Mã key đã tồn tại, đổi tên khác"); return; }
+    const ok = validateFields([{el:f.name, msg:"Nhập tên danh mục"}]);
+    if(!ok) return;
+    const name=f.name.value.trim(); let key=(f.key.value.trim()||S.slugify(name));
+    if(!editing && _cats.some(c=>c.key===key)){ setFieldError(f.name, "Tên này đã tồn tại, đổi tên khác"); return; }
     const btn=$("#csave"); btn.disabled=true; btn.textContent="Đang lưu…";
     try{
-      await DB.upsertCategory({key, name, type:f.type.value, sort:+f.sort.value||0, active:f.active.checked});
-      await loadCats(); toast("Đã lưu danh mục"); closeModal(); renderCategories();
+      const payload = {key, name, type:f.type.value, sort:+f.sort.value||0, active:f.active.checked};
+      const saved = await DB.upsertCategory(payload);
+      // Cập nhật _cats local thay vì refetch
+      if(editing){
+        const idx = _cats.findIndex(x=>x.key===ct.key);
+        if(idx>=0) _cats[idx] = saved || {..._cats[idx], ...payload};
+      } else {
+        _cats.push(saved || payload);
+        _cats.sort((a,b)=>(a.sort||0)-(b.sort||0));
+      }
+      // Đồng bộ S.CATEGORIES để form thêm SP đọc đúng
+      const sc = S.CATEGORIES.find(x=>x.key===key);
+      if(sc) Object.assign(sc, saved||payload); else S.CATEGORIES.push(saved||payload);
+      toast("Đã lưu danh mục"); closeModal(); drawCategories();
     }catch(err){ console.error(err); toast("Lỗi: "+(err.message||err)); btn.disabled=false; btn.textContent=editing?"Lưu":"Thêm danh mục"; }
+  };
+}
+
+/* ---------------- MÀU SẮC ---------------- */
+let _colors=[];
+async function renderColors(){
+  const c=$("#adminContent");
+  c.innerHTML=`<div class="empty-state">Đang tải màu sắc…</div>`;
+  _colors = await DB.listColorsAll();
+  if(!_products.length){ try{ _products = await DB.listProducts({adminAll:true}); }catch(e){} }
+  drawColors();
+}
+function colorRowHTML(col){
+  const used = _products.reduce((n,p)=> n + (Array.isArray(p.colors)&&p.colors.some(h=>(h||"").toLowerCase()===(col.hex||"").toLowerCase()) ? 1:0), 0);
+  return `<tr data-ckkey="${esc(col.key)}">
+    <td style="font-variant-numeric:tabular-nums">${col.sort||0}</td>
+    <td><span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:${safeColor(col.hex)};border:1px solid rgba(0,0,0,.12);vertical-align:middle"></span></td>
+    <td><b>${esc(col.name)}</b></td>
+    <td><code style="font-size:12px;color:var(--muted)">${esc(col.hex)}</code></td>
+    <td><code style="font-size:12px;color:var(--muted)">${esc(col.key)}</code></td>
+    <td>${used}</td>
+    <td><button type="button" class="switch cktoggle ${col.active!==false?'on':''}" data-key="${esc(col.key)}" aria-label="${col.active!==false?'Đang hiện — bấm để ẩn':'Đang ẩn — bấm để hiện'}">
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+      <span class="switch-label">${col.active!==false?"Hiện":"Ẩn"}</span>
+    </button></td>
+    <td style="white-space:nowrap">
+      <button class="mini ckedit" data-key="${esc(col.key)}">Sửa</button>
+      <button class="mini danger ckdel" data-key="${esc(col.key)}">Xoá</button>
+    </td></tr>`;
+}
+function drawColors(){
+  const c=$("#adminContent");
+  c.innerHTML=`
+  <div class="admin-head"><h1>Màu sắc (${_colors.length})</h1>
+    <div class="admin-actions"><button class="btn btn-dark" id="addCol" style="padding:10px 18px">+ Thêm màu</button></div>
+  </div>
+  <p class="muted" style="margin:-8px 0 18px;font-size:13.5px">Bảng màu chuẩn dùng chung cho mọi sản phẩm. Khi tạo / sửa SP, form sẽ pick từ list này thay vì gõ hex bừa. Ẩn 1 màu sẽ giấu khỏi picker (SP đang dùng vẫn giữ).</p>
+  ${_colors.length? `<div class="tablewrap"><table class="tbl">
+    <thead><tr><th>Thứ tự</th><th>Màu</th><th>Tên</th><th>Hex</th><th>Mã (key)</th><th>SP</th><th>Hiện</th><th></th></tr></thead>
+    <tbody>${_colors.map(colorRowHTML).join("")}</tbody></table></div>`
+    : `<div class="empty-state">Chưa có màu. Thêm màu đầu tiên để dùng cho sản phẩm.</div>`}`;
+  bindColorRowActions();
+}
+function bindColorRowActions(){
+  $("#addCol").onclick=()=>colorModal(null);
+  $$(".ckedit").forEach(b=> b.onclick=()=>colorModal(_colors.find(x=>x.key===b.dataset.key)));
+  $$(".cktoggle").forEach(sw=> sw.onclick=async()=>{
+    const col=_colors.find(x=>x.key===sw.dataset.key); if(!col) return;
+    const wasActive = col.active!==false;
+    const ok = await confirmDialog({
+      title: wasActive ? "Ẩn màu?" : "Hiện màu?",
+      body: wasActive
+        ? `Màu "<b>${esc(col.name)}</b>" sẽ ẩn khỏi color-picker khi thêm/sửa SP. Sản phẩm đang dùng màu này vẫn giữ nguyên.`
+        : `Màu "<b>${esc(col.name)}</b>" sẽ xuất hiện lại trong picker.`,
+      confirmText: wasActive ? "Ẩn" : "Hiện",
+      danger: wasActive,
+    });
+    if(!ok) return;
+    sw.disabled=true;
+    try{
+      const saved = await DB.upsertColor({...col, active: !wasActive});
+      Object.assign(col, saved || {}, {active: !wasActive});
+      const sc = S.COLORS.find(x=>x.key===col.key); if(sc) Object.assign(sc, {active: col.active});
+      toast(wasActive?"Đã ẩn màu":"Đã hiện màu");
+      const tr = $(`tr[data-ckkey="${CSS.escape(col.key)}"]`);
+      if(tr){ tr.outerHTML = colorRowHTML(col); bindColorRowActions(); }
+      else drawColors();
+    }catch(e){ toast("Lỗi: "+(e.message||e)); sw.disabled=false; }
+  });
+  $$(".ckdel").forEach(b=> b.onclick=async()=>{
+    const col=_colors.find(x=>x.key===b.dataset.key);
+    const used = _products.reduce((n,p)=> n + (Array.isArray(p.colors)&&p.colors.some(h=>(h||"").toLowerCase()===(col?.hex||"").toLowerCase()) ? 1:0), 0);
+    const ok = await confirmDialog({
+      title:"Xoá màu?",
+      body: used
+        ? `Màu "<b>${esc(col?.name||"")}</b>" đang được dùng bởi <b>${used} sản phẩm</b>. Xoá khỏi bảng màu chỉ ảnh hưởng picker; SP vẫn giữ giá trị hex hiện tại.`
+        : `Màu "<b>${esc(col?.name||"")}</b>" sẽ bị xoá vĩnh viễn khỏi bảng màu.`,
+      confirmText:"Xoá", cancelText:"Huỷ", danger:true,
+    });
+    if(!ok) return;
+    try{
+      await DB.deleteColor(b.dataset.key);
+      const idx = _colors.findIndex(x=>x.key===b.dataset.key);
+      if(idx>=0) _colors.splice(idx,1);
+      const sidx = S.COLORS.findIndex(x=>x.key===b.dataset.key);
+      if(sidx>=0) S.COLORS.splice(sidx,1);
+      toast("Đã xoá màu"); drawColors();
+    }catch(e){ toast("Lỗi: "+(e.message||e)); }
+  });
+}
+function colorModal(col){
+  const editing=!!col;
+  col = col || {key:"",name:"",hex:"#888888",sort:(_colors.length+1),active:true};
+  openModal(`<h3 class="modal-title">${editing?"Sửa":"Thêm"} màu</h3>
+    <form id="colform" novalidate>
+      <div class="frow">
+        <label class="fld" style="grid-column:span 2"><span>Tên hiển thị *</span><input name="name" value="${esc(col.name)}" required placeholder="VD: Xanh navy"></label>
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Mã key ${editing?'(không đổi)':'(tự tạo)'}</span><input name="key" value="${esc(col.key)}" ${editing?'readonly style="background:var(--bg-soft)"':'placeholder="xanh-navy"'}></label>
+        <label class="fld"><span>Thứ tự</span><input name="sort" type="number" value="${col.sort||0}"></label>
+      </div>
+      <div class="fld"><span>Màu (hex) *</span>
+        <div style="display:flex;align-items:center;gap:12px">
+          <input type="color" name="hex" value="${safeColor(col.hex)}" style="width:56px;height:44px;border:1.5px solid var(--line);border-radius:10px;background:#fff;padding:2px;cursor:pointer">
+          <input type="text" name="hexText" value="${esc(col.hex)}" placeholder="#RRGGBB" pattern="^#[0-9a-fA-F]{3,8}$" style="flex:1">
+          <span id="cpvw" style="display:inline-block;width:44px;height:44px;border-radius:50%;background:${safeColor(col.hex)};border:1px solid rgba(0,0,0,.12);flex-shrink:0"></span>
+        </div>
+      </div>
+      <label class="fld" style="display:flex;align-items:center;gap:8px;flex-direction:row">
+        <input type="checkbox" name="active" ${col.active!==false?"checked":""} style="width:18px;height:18px"> <span style="margin:0">Hiển thị trong picker</span></label>
+      <div class="modal-foot">
+        <button class="btn btn-dark btn-block" type="submit" id="colsave">${editing?"Lưu":"Thêm màu"}</button>
+      </div>
+    </form>`);
+  const f=$("#colform");
+  const nameInp=f.name, keyInp=f.key, hexInp=f.hex, hexText=f.hexText, pv=$("#cpvw");
+  const syncFromColor = ()=>{ hexText.value=hexInp.value; pv.style.background=safeColor(hexInp.value); };
+  const syncFromText = ()=>{
+    if(/^#[0-9a-fA-F]{6}$/.test(hexText.value)){ hexInp.value=hexText.value; pv.style.background=safeColor(hexText.value); }
+  };
+  hexInp.oninput=syncFromColor; hexText.oninput=syncFromText;
+  if(!editing) nameInp.oninput=()=>{ keyInp.value = S.slugify(nameInp.value); };
+  f.onsubmit=async(e)=>{
+    e.preventDefault();
+    const ok = validateFields([
+      {el:nameInp, msg:"Nhập tên màu"},
+      {el:hexText, msg:"Hex không hợp lệ", test:v=> /^#[0-9a-fA-F]{6}$/.test(v)},
+    ]);
+    if(!ok) return;
+    const name=nameInp.value.trim();
+    let key=(keyInp.value.trim()||S.slugify(name));
+    if(!editing && _colors.some(c=>c.key===key)){ setFieldError(nameInp,"Tên này đã tồn tại, đổi tên khác"); return; }
+    const btn=$("#colsave"); btn.disabled=true; btn.textContent="Đang lưu…";
+    try{
+      const payload={key, name, hex:hexText.value.trim(), sort:+f.sort.value||0, active:f.active.checked};
+      const saved = await DB.upsertColor(payload);
+      if(editing){
+        const idx=_colors.findIndex(x=>x.key===col.key);
+        if(idx>=0) _colors[idx]=saved || {..._colors[idx],...payload};
+      } else {
+        _colors.push(saved||payload);
+        _colors.sort((a,b)=>(a.sort||0)-(b.sort||0));
+      }
+      const sc = S.COLORS.find(x=>x.key===key);
+      if(sc) Object.assign(sc, saved||payload); else S.COLORS.push(saved||payload);
+      toast("Đã lưu màu"); closeModal(); drawColors();
+    }catch(err){ console.error(err); toast("Lỗi: "+(err.message||err)); btn.disabled=false; btn.textContent=editing?"Lưu":"Thêm màu"; }
+  };
+}
+
+/* ---------------- TRANG CHỦ (custom) ---------------- */
+const HOME_DEFAULTS = {
+  tickerHeader: [
+    "🚚 Miễn phí giao hàng cho đơn từ 500.000₫",
+    "⚡ Sale tới 50% toàn bộ sản phẩm",
+    "↩ Đổi trả miễn phí trong 7 ngày",
+    "✨ Hàng mới về mỗi tuần",
+    "💬 Hỗ trợ tư vấn 24/7",
+  ],
+  tickerBottom: ["★ FREESHIP 500K","★ SALE 50%","★ NEW ARRIVALS"],
+  heroHeadline: "Be Bold.<br>Be New.<br>Be <em>Original.</em>",
+  heroSub: "",
+  heroCta: "Khám phá bộ sưu tập",
+  heroCtaHref: "collection.html",
+  heroImage: "",
+  catTiles: [],
+  perks: [
+    {icon:"🚚", title:"Freeship 500K", desc:"Toàn quốc cho đơn từ 500.000₫"},
+    {icon:"↩",  title:"Đổi trả 7 ngày", desc:"Đổi size, đổi mẫu dễ dàng"},
+    {icon:"✓",  title:"Chất liệu cao cấp", desc:"Cotton 100% form relaxed"},
+    {icon:"💬", title:"Hỗ trợ 24/7", desc:"Nhắn tin là có phản hồi"},
+  ],
+  stripText: "",
+  newsletterTitle: "Đăng ký nhận ưu đãi",
+  newsletterSub: "Nhập email để nhận mã giảm giá, quà tặng và tin sản phẩm mới nhất.",
+  footerAbout: "",
+  featureBlocks: [
+    {eyebrow:"Signature",     title:"Relaxed Fit",      sub:"Bán chạy nhất",       cta:"Khám phá", href:"collection.html?cat=ao-thun", from:"#1d1d1d", to:"#444",    image:"", catKey:"ao-thun", collection:"Coffee Club",  reverse:false},
+    {eyebrow:"Aesthetic",     title:"Ringer Tee",       sub:"Phong cách cổ điển",  cta:"Mua ngay", href:"collection.html?cat=ringer",  from:"#2c3a4f", to:"#5b7da0", image:"", catKey:"ringer",  collection:"Ocean Calling",reverse:true},
+    {eyebrow:"Pure comfort",  title:"Polo Relaxed",     sub:"Lịch sự mà thoải mái",cta:"Khám phá", href:"collection.html?cat=polo",    from:"#3f5c46", to:"#6f7445", image:"", catKey:"polo",    collection:"Old Money",    reverse:false},
+    {eyebrow:"New drop",      title:"Tank Top",         sub:"Hè 2026",             cta:"Khám phá", href:"collection.html?cat=ba-lo",   from:"#b5523a", to:"#d8a441", image:"", catKey:"ba-lo",   collection:"",             reverse:true},
+    {eyebrow:"Everyday",      title:"Hoodie & Sweater", sub:"Ấm áp mỗi ngày",      cta:"Khám phá", href:"collection.html?cat=hoodie",  from:"#2c3a4f", to:"#1c1c1c", image:"", catKey:"hoodie",  collection:"",             reverse:false},
+  ],
+};
+let _home = {...HOME_DEFAULTS};
+async function renderHomeSettings(){
+  const c=$("#adminContent");
+  c.innerHTML=`<div class="empty-state">Đang tải cấu hình…</div>`;
+  try{
+    const v = await DB.getSettings("home");
+    _home = {...HOME_DEFAULTS, ...(v||{})};
+    if(!_home.catTiles) _home.catTiles = [];
+  }catch(e){ console.warn(e); _home = {...HOME_DEFAULTS}; }
+  if(!_products.length){ try{ _products = await DB.listProducts({adminAll:true}); }catch(e){} }
+  drawHomeSettings();
+}
+function tileBg(t, fallbackA, fallbackB){
+  if(t && t.image) return `background:linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.35)),url('${esc(t.image)}') center/cover no-repeat`;
+  return `background:linear-gradient(135deg,${safeColor(t&&t.from||fallbackA)},${safeColor(t&&t.to||fallbackB)})`;
+}
+function drawHomeSettings(){
+  // Live-preview full trang chủ — hover vào vùng nào sẽ hiện nút Sửa.
+  const c=$("#adminContent");
+  const HG = _home;
+  const heroSub = HG.heroSub || `${S.BRAND.name} — local brand streetwear cho người trẻ dám thể hiện chất riêng.`;
+  const heroStyle = HG.heroImage ? `style="background:linear-gradient(rgba(0,0,0,.35),rgba(0,0,0,.35)),url('${esc(HG.heroImage)}') center/cover no-repeat"` : "";
+  const tHeader = (HG.tickerHeader||[]).map(t=>`<span>${esc(t)}</span>`).join("");
+  const tBottom = (HG.tickerBottom||[]).map(t=>`<span>${esc(t)}</span>`).join("");
+  const tiles = [["ao-thun","#1d1d1d","#555"],["hoodie","#2c3a4f","#557"],["polo","#3f5c46","#697"],["tote","#b5523a","#d8a441"]];
+  const stripText = HG.stripText || (S.BRAND?.tagline || "BE BOLD. BE NEW.").toUpperCase();
+  const perks = HG.perks && HG.perks.length ? HG.perks : HOME_DEFAULTS.perks;
+  const footerAbout = HG.footerAbout || `${S.BRAND?.tagline||""}. Thời trang local brand cho người trẻ dám khác biệt.`;
+
+  // Placeholder cards trắng cho product rows — không load data thật.
+  const placeholderCard = (i)=>`<article class="card hp-pcard">
+    <div class="thumb" style="background:#f4f1ec"></div>
+    <div class="info">
+      <div class="cat">COLLECTION</div>
+      <div class="name">Sản phẩm mẫu #${i+1}</div>
+      <div class="price"><span class="now">165.000₫</span><span class="was">318.000₫</span><span class="off">-48%</span></div>
+    </div>
+  </article>`;
+  const placeholderRow = `<div class="scroller">
+    <button class="scroll-btn prev" disabled>‹</button>
+    <div class="row" style="display:flex;gap:18px;overflow:hidden">
+      ${Array.from({length:5}, (_,i)=>placeholderCard(i)).join("")}
+    </div>
+    <button class="scroll-btn next" disabled>›</button>
+  </div>`;
+  // Feature blocks — admin có thể edit từng cái + reorder + xoá + thêm
+  const blocks = (_home.featureBlocks && _home.featureBlocks.length) ? _home.featureBlocks : HOME_DEFAULTS.featureBlocks;
+  const featureBlockHTML = (b, idx)=>{
+    const bg = b.image
+      ? `background:linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.35)),url('${esc(b.image)}') center/cover no-repeat`
+      : `background:linear-gradient(135deg,${safeColor(b.from||"#1d1d1d")},${safeColor(b.to||"#444")})`;
+    const banner = `<a class="feature-banner" href="javascript:void(0)" style="${bg}">
+      <div class="label"><div class="eyebrow">${esc(b.eyebrow||"")}</div><h3>${esc(b.title||"")}</h3><span class="btn btn-light">${esc(b.cta||"")}</span></div>
+    </a>`;
+    const copy = `<div class="feature-copy" style="width:100%">
+      <div style="margin-bottom:14px"><div class="section-head" style="margin-bottom:6px"><div>
+        <div class="eyebrow" style="color:var(--sale);font-size:12px;letter-spacing:.18em;text-transform:uppercase;font-weight:600">${esc(b.sub||"")}</div>
+        <h2 style="font-family:var(--font-display);text-transform:uppercase;font-size:clamp(22px,2.6vw,30px)">${esc(b.title||"")}</h2>
+      </div></div></div>
+      ${placeholderRow}
+    </div>`;
+    return `<div class="hp-zone" data-zone="block-${idx}" style="position:relative">
+      <div class="feature ${b.reverse?'rev':''}">${b.reverse?copy+banner:banner+copy}</div>
+      <div class="hp-block-actions">
+        <button type="button" class="hp-edit" data-edit="block" data-bi="${idx}">✎ Sửa block</button>
+        <button type="button" class="hp-edit hp-mini" data-edit="block-up"  data-bi="${idx}" ${idx===0?'disabled':''}>↑</button>
+        <button type="button" class="hp-edit hp-mini" data-edit="block-dn"  data-bi="${idx}" ${idx===blocks.length-1?'disabled':''}>↓</button>
+        <button type="button" class="hp-edit hp-mini hp-danger" data-edit="block-del" data-bi="${idx}">🗑</button>
+      </div>
+    </div>`;
+  };
+
+  c.innerHTML=`
+  <div class="admin-head"><h1>Trang chủ</h1>
+    <div class="admin-actions">
+      <button class="mini" id="hReset">Khôi phục mặc định</button>
+      <button class="btn btn-dark" id="hSave" style="padding:10px 18px">Lưu thay đổi</button>
+    </div>
+  </div>
+  <p class="muted" style="margin:-8px 0 18px;font-size:13.5px">Đây là <b>bản xem trước</b> đầy đủ trang chủ khách thấy (sản phẩm dùng ảnh placeholder trắng để dễ nhìn). Rê chuột vào vùng cần sửa → bấm nút <b style="color:var(--sale)">✎ Sửa</b> ở góc.</p>
+
+  <div class="home-preview">
+    <!-- Header (preview, không edit) -->
+    <header class="header"><div class="wrap header-row">
+      <a class="logo" href="javascript:void(0)">${esc(S.BRAND?.name||"VOISTUDIO")}<span class="dot">.</span></a>
+      <nav><ul class="nav">
+        <li><a href="javascript:void(0)">Trang chủ</a></li>
+        <li><a href="javascript:void(0)">Áo Thun</a></li>
+        <li><a href="javascript:void(0)">Hoodie</a></li>
+        <li><a href="javascript:void(0)">Phụ kiện</a></li>
+        <li><a href="javascript:void(0)">Sale</a></li>
+      </ul></nav>
+      <div class="icons"><span class="icon-btn">🔍</span><span class="icon-btn">👤</span><span class="icon-btn">🛒</span></div>
+    </div></header>
+
+    <!-- Ticker header -->
+    <div class="hp-zone" data-zone="tickerHeader">
+      <div class="announce"><div class="track">${Array(4).fill(tHeader).join("")}</div></div>
+      <button type="button" class="hp-edit" data-edit="tickerHeader">✎ Sửa text chạy</button>
+    </div>
+
+    <!-- Hero -->
+    <div class="hp-zone" data-zone="hero">
+      <section class="hero" ${heroStyle}>
+        <div class="hero-inner">
+          <h1>${HG.heroHeadline || HOME_DEFAULTS.heroHeadline}</h1>
+          <p>${esc(heroSub)}</p>
+          <a class="btn btn-light" href="javascript:void(0)">${esc(HG.heroCta || "Khám phá")}</a>
+        </div>
+        <div class="ticker"><div class="track">${Array(6).fill(tBottom).join("")}</div></div>
+      </section>
+      <button type="button" class="hp-edit" data-edit="hero">✎ Sửa hero</button>
+      <button type="button" class="hp-edit hp-edit-2" data-edit="tickerBottom">✎ Sửa text chạy dưới</button>
+    </div>
+
+    <!-- Danh mục nổi bật -->
+    <div class="hp-zone" data-zone="tiles">
+      <section class="section tight"><div class="wrap">
+        <div class="section-head"><div><div class="eyebrow">Mua theo danh mục</div><h2>Danh mục nổi bật</h2></div></div>
+        <div class="cats">
+          ${tiles.map(([k,a,b])=>{
+            const cat = (S.CATEGORIES||[]).find(x=>x.key===k);
+            const tile = (_home.catTiles||[]).find(t=>t.key===k);
+            if(!cat) return "";
+            return `<div class="hp-tile-wrap">
+              <a class="cat-tile" href="javascript:void(0)" style="${tileBg(tile,a,b)}"><span>${esc(cat.name)}</span></a>
+              <button type="button" class="hp-edit" data-edit="tile" data-key="${esc(k)}">✎ Đổi ảnh</button>
+            </div>`;
+          }).join("")}
+        </div>
+      </div></section>
+    </div>
+
+    <!-- Feature blocks (placeholder products) -->
+    <section class="section"><div class="wrap">
+      ${blocks.map((b,i)=>featureBlockHTML(b,i)).join("")}
+      <div style="text-align:center;padding:14px 0">
+        <button type="button" class="mini" id="addBlock">+ Thêm block</button>
+      </div>
+    </div></section>
+
+    <!-- Brand strip -->
+    <div class="hp-zone" data-zone="strip">
+      <div class="strip"><div class="track">${Array(8).fill(`<span>${esc(S.BRAND?.name||"VOISTUDIO")}</span><span class="star">✦</span><span>${esc(stripText)}</span><span class="star">✦</span>`).join("")}</div></div>
+      <button type="button" class="hp-edit" data-edit="strip">✎ Sửa strip</button>
+    </div>
+
+    <!-- Perks -->
+    <div class="hp-zone" data-zone="perks">
+      <section class="section tight"><div class="wrap"><div class="perks">
+        ${perks.map(p=>`<div class="perk"><div class="ic">${esc(p.icon)}</div><h5>${esc(p.title)}</h5><p>${esc(p.desc)}</p></div>`).join("")}
+      </div></div></section>
+      <button type="button" class="hp-edit" data-edit="perks">✎ Sửa quyền lợi</button>
+    </div>
+
+    <!-- Newsletter -->
+    <div class="hp-zone" data-zone="newsletter">
+      <section class="newsletter"><div class="wrap">
+        <h2>${esc(HG.newsletterTitle || HOME_DEFAULTS.newsletterTitle)}</h2>
+        <p>${esc(HG.newsletterSub || HOME_DEFAULTS.newsletterSub)}</p>
+        <form class="subscribe" onsubmit="return false" style="align-items:flex-start">
+          <div class="fld" style="flex:1;margin:0"><input type="email" placeholder="Email của bạn"></div>
+          <button class="btn btn-dark" type="button">Đăng ký</button>
+        </form>
+      </div></section>
+      <button type="button" class="hp-edit" data-edit="newsletter">✎ Sửa newsletter</button>
+    </div>
+
+    <!-- Footer -->
+    <div class="hp-zone" data-zone="footer">
+      <footer class="footer"><div class="wrap">
+        <div class="foot-grid">
+          <div>
+            <div class="logo">${esc(S.BRAND?.name||"VOISTUDIO")}<span class="dot">.</span></div>
+            <p style="max-width:260px;color:#b9b9b9">${esc(footerAbout)}</p>
+            <div class="socials"><a href="javascript:void(0)">f</a><a href="javascript:void(0)">◎</a><a href="javascript:void(0)">♪</a></div>
+          </div>
+          <div><h5>Danh mục</h5><ul>
+            ${(S.CATEGORIES||[]).slice(0,5).map(c=>`<li><a href="javascript:void(0)">${esc(c.name)}</a></li>`).join("")}
+          </ul></div>
+          <div><h5>Hỗ trợ</h5><ul>
+            <li><a href="javascript:void(0)">Chính sách bảo mật</a></li>
+            <li><a href="javascript:void(0)">Đổi trả</a></li>
+            <li><a href="javascript:void(0)">Vận chuyển</a></li>
+          </ul></div>
+          <div><h5>Liên hệ</h5>
+            <p style="color:#b9b9b9;line-height:1.9">
+              Hotline: <strong style="color:#fff">${esc(S.BRAND?.hotline||"")}</strong><br>
+              Email: ${esc(S.BRAND?.email||"")}<br>
+              ${esc(S.BRAND?.hours||"")}
+            </p>
+          </div>
+        </div>
+        <div class="foot-bottom">
+          <span>© ${new Date().getFullYear()} ${esc(S.BRAND?.name||"")}.</span>
+          <span>Thiết kế lấy cảm hứng từ streetwear Việt Nam.</span>
+        </div>
+      </div></footer>
+      <button type="button" class="hp-edit" data-edit="footer">✎ Sửa footer</button>
+    </div>
+  </div>`;
+
+  bindHomePreviewEvents();
+}
+function bindHomePreviewEvents(){
+  $$(".hp-edit").forEach(btn=> btn.onclick=async()=>{
+    const t = btn.dataset.edit;
+    if(t==="tickerHeader") openTickerEditor("tickerHeader","Text chạy ngang (header)");
+    else if(t==="tickerBottom") openTickerEditor("tickerBottom","Text chạy ngang (cuối hero)");
+    else if(t==="hero") openHeroEditor();
+    else if(t==="tile") openTileEditor(btn.dataset.key);
+    else if(t==="strip") openStripEditor();
+    else if(t==="perks") openPerksEditor();
+    else if(t==="newsletter") openNewsletterEditor();
+    else if(t==="footer") openFooterEditor();
+    else if(t==="block") openBlockEditor(+btn.dataset.bi);
+    else if(t==="block-up" || t==="block-dn"){
+      const i=+btn.dataset.bi; const list=_home.featureBlocks=_home.featureBlocks||[];
+      const j = t==="block-up" ? i-1 : i+1;
+      if(j<0||j>=list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      drawHomeSettings();
+    } else if(t==="block-del"){
+      const i=+btn.dataset.bi; const b=(_home.featureBlocks||[])[i];
+      const ok = await confirmDialog({title:"Xoá block?", body:`Block "<b>${esc(b?.title||"")}</b>" sẽ bị xoá khỏi trang chủ.`, confirmText:"Xoá", danger:true});
+      if(!ok) return;
+      _home.featureBlocks.splice(i,1); drawHomeSettings();
+    }
+  });
+  const addBlockBtn = $("#addBlock");
+  if(addBlockBtn) addBlockBtn.onclick=()=>{
+    _home.featureBlocks = _home.featureBlocks || [];
+    _home.featureBlocks.push({eyebrow:"New",title:"Block mới",sub:"Mô tả",cta:"Khám phá",href:"collection.html",from:"#333",to:"#666",image:"",catKey:"",collection:"",reverse:false});
+    drawHomeSettings();
+    openBlockEditor(_home.featureBlocks.length-1);
+  };
+  $("#hReset").onclick=async()=>{
+    const ok = await confirmDialog({
+      title:"Khôi phục mặc định?",
+      body:"Toàn bộ custom hiện tại sẽ bị xoá và trở về cấu hình gốc.",
+      confirmText:"Khôi phục", danger:true,
+    });
+    if(!ok) return;
+    _home = JSON.parse(JSON.stringify(HOME_DEFAULTS));
+    drawHomeSettings();
+  };
+  $("#hSave").onclick=async()=>{
+    const btn=$("#hSave"); btn.disabled=true; btn.textContent="Đang lưu…";
+    try{
+      _home.tickerHeader = (_home.tickerHeader||[]).map(s=>(s||"").trim()).filter(Boolean);
+      _home.tickerBottom = (_home.tickerBottom||[]).map(s=>(s||"").trim()).filter(Boolean);
+      _home.catTiles = (_home.catTiles||[]).filter(t=>t&&(t.image||t.from||t.to));
+      await DB.saveSettings("home", _home);
+      toast("Đã lưu cấu hình trang chủ");
+    }catch(e){ toast("Lỗi: "+(e.message||e)); }
+    finally{ btn.disabled=false; btn.textContent="Lưu thay đổi"; }
+  };
+}
+
+/* --- Modal sửa: hero / ticker / tile --- */
+function openTickerEditor(field, title){
+  const items = (_home[field]||[]).slice();
+  const itemsHtml = (arr)=> arr.map((t,i)=>`
+    <div class="frow" style="grid-template-columns:1fr auto;gap:8px;margin-bottom:8px">
+      <input type="text" data-ti="${i}" value="${esc(t)}" style="padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:14px">
+      <button type="button" class="mini danger" data-tdel="${i}">×</button>
+    </div>`).join("");
+  openModal(`<h3 class="modal-title">${esc(title)}</h3>
+    <p class="muted" style="font-size:13px;margin-bottom:14px">Mỗi dòng là 1 đoạn text. Có thể dùng emoji (🚚 ⚡ ✨ …).</p>
+    <div id="teList">${itemsHtml(items)}</div>
+    <button type="button" class="mini" id="teAdd" style="margin-top:6px">+ Thêm dòng</button>
+    <div class="modal-foot" style="display:flex;gap:10px">
+      <button type="button" class="btn btn-outline" data-act="cancel" style="flex:1">Huỷ</button>
+      <button type="button" class="btn btn-dark" data-act="ok" style="flex:1">Áp dụng</button>
+    </div>`);
+  const sync=()=>{ items.length=0; $$("#teList input").forEach((inp,i)=>{ items[i]=inp.value; }); };
+  $("#teList").addEventListener("input", sync);
+  $("#teAdd").onclick=()=>{ items.push(""); $("#teList").innerHTML=itemsHtml(items); };
+  $("#teList").addEventListener("click",(e)=>{
+    const b = e.target.closest("[data-tdel]");
+    if(!b) return;
+    items.splice(+b.dataset.tdel,1);
+    $("#teList").innerHTML=itemsHtml(items);
+  });
+  document.querySelector("[data-act=cancel]").onclick=closeModal;
+  document.querySelector("[data-act=ok]").onclick=()=>{
+    sync();
+    _home[field] = items.map(s=>(s||"").trim()).filter(Boolean);
+    closeModal(); drawHomeSettings();
+  };
+}
+function openHeroEditor(){
+  const H = _home;
+  openModal(`<h3 class="modal-title">Sửa hero</h3>
+    <form id="heForm">
+      <label class="fld"><span>Headline (cho phép &lt;br&gt;, &lt;em&gt;)</span>
+        <textarea name="heroHeadline" rows="3">${esc(H.heroHeadline||"")}</textarea></label>
+      <label class="fld"><span>Mô tả phụ</span>
+        <textarea name="heroSub" rows="2" placeholder="Để trống = dùng tagline brand">${esc(H.heroSub||"")}</textarea></label>
+      <div class="frow">
+        <label class="fld"><span>Nút CTA — text</span><input name="heroCta" value="${esc(H.heroCta||"")}"></label>
+        <label class="fld"><span>Nút CTA — link</span><input name="heroCtaHref" value="${esc(H.heroCtaHref||"")}" placeholder="collection.html"></label>
+      </div>
+      <div class="fld"><span>Ảnh nền hero</span>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <input name="heroImage" id="heFileUrl" value="${esc(H.heroImage||"")}" placeholder="https://… (để trống = gradient đen)" style="flex:1">
+          <label class="mini" style="cursor:pointer"><span>⬆ Upload</span><input type="file" id="heFile" accept="image/*" hidden></label>
+        </div>
+        ${H.heroImage?`<div style="margin-top:8px"><img src="${esc(H.heroImage)}" alt="" style="max-width:100%;max-height:160px;border-radius:10px;border:1px solid var(--line)"></div>`:""}
+      </div>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" id="heCancel" style="flex:1">Huỷ</button>
+        <button type="submit" class="btn btn-dark" style="flex:1">Áp dụng</button>
+      </div>
+    </form>`);
+  $("#heCancel").onclick=closeModal;
+  $("#heFile").onchange=async(e)=>{
+    const fl = e.target.files[0]; if(!fl) return;
+    toast("Đang upload…");
+    try{ const url = await DB.uploadImage(fl); $("#heFileUrl").value = url; toast("Đã upload"); }
+    catch(err){ toast("Lỗi upload: "+(err.message||err)); }
+  };
+  $("#heForm").onsubmit=(e)=>{
+    e.preventDefault(); const f=e.target;
+    _home.heroHeadline = f.heroHeadline.value;
+    _home.heroSub      = f.heroSub.value;
+    _home.heroCta      = f.heroCta.value;
+    _home.heroCtaHref  = f.heroCtaHref.value;
+    _home.heroImage    = f.heroImage.value.trim();
+    closeModal(); drawHomeSettings();
+  };
+}
+function openTileEditor(catKey){
+  const cat = (S.CATEGORIES||[]).find(c=>c.key===catKey);
+  const tile = (_home.catTiles||[]).find(t=>t.key===catKey) || {key:catKey, image:"", from:"", to:""};
+  openModal(`<h3 class="modal-title">Đổi ảnh tile: ${esc(cat?.name||catKey)}</h3>
+    <form id="tlForm">
+      <div class="fld"><span>Ảnh nền tile</span>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <input name="image" id="tlUrl" value="${esc(tile.image||"")}" placeholder="https://… để trống = dùng gradient" style="flex:1">
+          <label class="mini" style="cursor:pointer"><span>⬆ Upload</span><input type="file" id="tlFile" accept="image/*" hidden></label>
+        </div>
+        ${tile.image?`<div style="margin-top:8px"><img src="${esc(tile.image)}" alt="" style="max-width:100%;max-height:140px;border-radius:10px;border:1px solid var(--line)"></div>`:""}
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Gradient — từ</span><input type="color" name="from" value="${safeColor(tile.from||'#1d1d1d')}" style="width:100%;height:42px;padding:2px;border:1.5px solid var(--line);border-radius:10px;cursor:pointer"></label>
+        <label class="fld"><span>Gradient — đến</span><input type="color" name="to" value="${safeColor(tile.to||'#555555')}" style="width:100%;height:42px;padding:2px;border:1.5px solid var(--line);border-radius:10px;cursor:pointer"></label>
+      </div>
+      <p class="muted" style="font-size:12.5px">Có ảnh → ưu tiên ảnh. Không ảnh → dùng gradient 2 màu trên.</p>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" id="tlCancel" style="flex:1">Huỷ</button>
+        <button type="submit" class="btn btn-dark" style="flex:1">Áp dụng</button>
+      </div>
+    </form>`);
+  $("#tlCancel").onclick=closeModal;
+  $("#tlFile").onchange=async(e)=>{
+    const fl = e.target.files[0]; if(!fl) return;
+    toast("Đang upload…");
+    try{ const url = await DB.uploadImage(fl); $("#tlUrl").value = url; toast("Đã upload"); }
+    catch(err){ toast("Lỗi upload: "+(err.message||err)); }
+  };
+  $("#tlForm").onsubmit=(e)=>{
+    e.preventDefault(); const f=e.target;
+    let t = (_home.catTiles||[]).find(x=>x.key===catKey);
+    if(!t){ t={key:catKey}; (_home.catTiles=_home.catTiles||[]).push(t); }
+    t.image = f.image.value.trim();
+    t.from  = f.from.value;
+    t.to    = f.to.value;
+    closeModal(); drawHomeSettings();
+  };
+}
+function openStripEditor(){
+  openModal(`<h3 class="modal-title">Sửa strip thương hiệu</h3>
+    <form id="stForm">
+      <label class="fld"><span>Text strip (chữ in hoa)</span>
+        <input name="stripText" value="${esc(_home.stripText||"")}" placeholder="Để trống = dùng tagline brand"></label>
+      <p class="muted" style="font-size:12.5px">Dải chữ chạy ngang nằm giữa các block — thường là slogan brand.</p>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" id="stCancel" style="flex:1">Huỷ</button>
+        <button type="submit" class="btn btn-dark" style="flex:1">Áp dụng</button>
+      </div>
+    </form>`);
+  $("#stCancel").onclick=closeModal;
+  $("#stForm").onsubmit=(e)=>{ e.preventDefault(); _home.stripText = e.target.stripText.value.trim(); closeModal(); drawHomeSettings(); };
+}
+function openPerksEditor(){
+  const items = JSON.parse(JSON.stringify(_home.perks||HOME_DEFAULTS.perks));
+  const rowHTML = (p,i)=>`
+    <div class="frow" style="grid-template-columns:60px 1fr 1.5fr auto;gap:8px;margin-bottom:10px;align-items:center">
+      <input data-pi="${i}" data-pf="icon" value="${esc(p.icon||"")}" placeholder="🚚" style="padding:10px;border:1.5px solid var(--line);border-radius:8px;font-size:18px;text-align:center">
+      <input data-pi="${i}" data-pf="title" value="${esc(p.title||"")}" placeholder="Tiêu đề" style="padding:10px;border:1.5px solid var(--line);border-radius:8px;font-size:13.5px">
+      <input data-pi="${i}" data-pf="desc" value="${esc(p.desc||"")}" placeholder="Mô tả ngắn" style="padding:10px;border:1.5px solid var(--line);border-radius:8px;font-size:13.5px">
+      <button type="button" class="mini danger" data-pdel="${i}">×</button>
+    </div>`;
+  openModal(`<h3 class="modal-title">Sửa "Quyền lợi khách hàng"</h3>
+    <p class="muted" style="font-size:13px;margin-bottom:14px">4 ô lợi ích hiển thị trước khối newsletter.</p>
+    <div id="prList">${items.map(rowHTML).join("")}</div>
+    <button type="button" class="mini" id="prAdd" style="margin-top:6px">+ Thêm ô</button>
+    <div class="modal-foot" style="display:flex;gap:10px">
+      <button type="button" class="btn btn-outline" data-act="cancel" style="flex:1">Huỷ</button>
+      <button type="button" class="btn btn-dark" data-act="ok" style="flex:1">Áp dụng</button>
+    </div>`);
+  const sync=()=>{ $$("#prList input[data-pi]").forEach(inp=>{ const i=+inp.dataset.pi, f=inp.dataset.pf; if(!items[i]) items[i]={}; items[i][f]=inp.value; }); };
+  $("#prList").addEventListener("input", sync);
+  $("#prAdd").onclick=()=>{ items.push({icon:"✓",title:"",desc:""}); $("#prList").innerHTML=items.map(rowHTML).join(""); };
+  $("#prList").addEventListener("click",(e)=>{
+    const b = e.target.closest("[data-pdel]"); if(!b) return;
+    items.splice(+b.dataset.pdel,1);
+    $("#prList").innerHTML=items.map(rowHTML).join("");
+  });
+  document.querySelector("[data-act=cancel]").onclick=closeModal;
+  document.querySelector("[data-act=ok]").onclick=()=>{
+    sync();
+    _home.perks = items.map(p=>({icon:(p.icon||"").trim(),title:(p.title||"").trim(),desc:(p.desc||"").trim()})).filter(p=>p.title||p.desc);
+    closeModal(); drawHomeSettings();
+  };
+}
+function openNewsletterEditor(){
+  openModal(`<h3 class="modal-title">Sửa "Đăng ký nhận ưu đãi"</h3>
+    <form id="nlForm">
+      <label class="fld"><span>Tiêu đề</span><input name="newsletterTitle" value="${esc(_home.newsletterTitle||HOME_DEFAULTS.newsletterTitle)}"></label>
+      <label class="fld"><span>Mô tả ngắn</span><textarea name="newsletterSub" rows="2">${esc(_home.newsletterSub||HOME_DEFAULTS.newsletterSub)}</textarea></label>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" id="nlCancel" style="flex:1">Huỷ</button>
+        <button type="submit" class="btn btn-dark" style="flex:1">Áp dụng</button>
+      </div>
+    </form>`);
+  $("#nlCancel").onclick=closeModal;
+  $("#nlForm").onsubmit=(e)=>{ e.preventDefault(); const f=e.target;
+    _home.newsletterTitle = f.newsletterTitle.value.trim();
+    _home.newsletterSub   = f.newsletterSub.value.trim();
+    closeModal(); drawHomeSettings();
+  };
+}
+function openFooterEditor(){
+  openModal(`<h3 class="modal-title">Sửa footer</h3>
+    <form id="ftForm">
+      <label class="fld"><span>Đoạn giới thiệu brand (cột trái footer)</span>
+        <textarea name="footerAbout" rows="3" placeholder="Để trống = dùng tagline mặc định">${esc(_home.footerAbout||"")}</textarea></label>
+      <p class="muted" style="font-size:12.5px">Hotline / email / địa chỉ đang lấy từ BRAND trong <code>data.js</code> — sửa ở đó nếu cần.</p>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" id="ftCancel" style="flex:1">Huỷ</button>
+        <button type="submit" class="btn btn-dark" style="flex:1">Áp dụng</button>
+      </div>
+    </form>`);
+  $("#ftCancel").onclick=closeModal;
+  $("#ftForm").onsubmit=(e)=>{ e.preventDefault();
+    _home.footerAbout = e.target.footerAbout.value.trim();
+    closeModal(); drawHomeSettings();
+  };
+}
+function openBlockEditor(idx){
+  _home.featureBlocks = _home.featureBlocks || JSON.parse(JSON.stringify(HOME_DEFAULTS.featureBlocks));
+  const b = _home.featureBlocks[idx];
+  if(!b) return;
+  const catOpts = `<option value="">— Bỏ lọc theo danh mục —</option>` + (S.CATEGORIES||[]).map(c=>`<option value="${esc(c.key)}" ${b.catKey===c.key?"selected":""}>${esc(c.name)}</option>`).join("");
+  const colOpts = (S.COLLECTIONS||[]).map(c=>`<option value="${esc(c)}">`).join("");
+  openModal(`<h3 class="modal-title">Sửa block #${idx+1}</h3>
+    <form id="bkForm">
+      <div class="frow">
+        <label class="fld"><span>Eyebrow (chữ nhỏ phía trên)</span><input name="eyebrow" value="${esc(b.eyebrow||"")}" placeholder="VD: Signature"></label>
+        <label class="fld"><span>Sub (mô tả phụ)</span><input name="sub" value="${esc(b.sub||"")}" placeholder="VD: Bán chạy nhất"></label>
+      </div>
+      <div class="frow">
+        <label class="fld" style="grid-column:span 2"><span>Tiêu đề chính</span><input name="title" value="${esc(b.title||"")}" placeholder="VD: Polo Relaxed"></label>
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Nút CTA — text</span><input name="cta" value="${esc(b.cta||"")}"></label>
+        <label class="fld"><span>Nút CTA — link</span><input name="href" value="${esc(b.href||"")}" placeholder="collection.html?cat=polo"></label>
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Lọc sản phẩm theo Danh mục</span><select name="catKey">${catOpts}</select></label>
+        <label class="fld"><span>… và/hoặc Bộ sưu tập</span><input name="collection" list="bkCols" value="${esc(b.collection||"")}" placeholder="Tự gõ hoặc chọn"><datalist id="bkCols">${colOpts}</datalist></label>
+      </div>
+      <div class="fld"><span>Ảnh nền banner</span>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <input name="image" id="bkUrl" value="${esc(b.image||"")}" placeholder="https://… để trống = dùng gradient" style="flex:1">
+          <label class="mini" style="cursor:pointer"><span>⬆ Upload</span><input type="file" id="bkFile" accept="image/*" hidden></label>
+        </div>
+        ${b.image?`<div style="margin-top:8px"><img src="${esc(b.image)}" alt="" style="max-width:100%;max-height:140px;border-radius:10px;border:1px solid var(--line)"></div>`:""}
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Gradient — từ</span><input type="color" name="from" value="${safeColor(b.from||'#1d1d1d')}" style="width:100%;height:42px;padding:2px;border:1.5px solid var(--line);border-radius:10px;cursor:pointer"></label>
+        <label class="fld"><span>Gradient — đến</span><input type="color" name="to" value="${safeColor(b.to||'#444444')}" style="width:100%;height:42px;padding:2px;border:1.5px solid var(--line);border-radius:10px;cursor:pointer"></label>
+      </div>
+      <label class="fld" style="display:flex;align-items:center;gap:8px;flex-direction:row">
+        <input type="checkbox" name="reverse" ${b.reverse?"checked":""} style="width:18px;height:18px">
+        <span style="margin:0">Đảo banner sang phải (reverse layout)</span></label>
+      <p class="muted" style="font-size:12.5px">Có ảnh → ưu tiên ảnh. Không ảnh → dùng gradient 2 màu trên.</p>
+      <div class="modal-foot" style="display:flex;gap:10px">
+        <button type="button" class="btn btn-outline" id="bkCancel" style="flex:1">Huỷ</button>
+        <button type="submit" class="btn btn-dark" style="flex:1">Áp dụng</button>
+      </div>
+    </form>`,"wide");
+  $("#bkCancel").onclick=closeModal;
+  $("#bkFile").onchange=async(e)=>{
+    const fl=e.target.files[0]; if(!fl) return;
+    toast("Đang upload…");
+    try{ const url=await DB.uploadImage(fl); $("#bkUrl").value=url; toast("Đã upload"); }
+    catch(err){ toast("Lỗi upload: "+(err.message||err)); }
+  };
+  $("#bkForm").onsubmit=(e)=>{
+    e.preventDefault(); const f=e.target;
+    Object.assign(b, {
+      eyebrow:f.eyebrow.value.trim(), sub:f.sub.value.trim(), title:f.title.value.trim(),
+      cta:f.cta.value.trim(), href:f.href.value.trim(),
+      catKey:f.catKey.value, collection:f.collection.value.trim(),
+      image:f.image.value.trim(), from:f.from.value, to:f.to.value,
+      reverse:f.reverse.checked,
+    });
+    closeModal(); drawHomeSettings();
   };
 }
 
@@ -224,8 +1001,15 @@ async function renderOrders(filter=""){
   $("#ofilter").onchange=e=>renderOrders(e.target.value);
   $("#refreshO").onclick=()=>renderOrders(filter);
   $$(".ostatus").forEach(sel=> sel.onchange=async()=>{
-    try{ await DB.updateOrderStatus(sel.dataset.id, sel.value); sel.style.borderColor=STATUS_COLOR[sel.value]; toast("Đã cập nhật trạng thái"); }
-    catch(e){ toast("Lỗi: "+(e.message||e)); }
+    const prev = (_orders.find(o=>(o.id||o.code)===sel.dataset.id)||{}).status;
+    try{
+      await DB.updateOrderStatus(sel.dataset.id, sel.value);
+      // Cập nhật _orders local — không refetch
+      const o = _orders.find(x=>(x.id||x.code)===sel.dataset.id);
+      if(o) o.status = sel.value;
+      sel.style.borderColor=STATUS_COLOR[sel.value];
+      toast("Đã cập nhật trạng thái");
+    }catch(e){ toast("Lỗi: "+(e.message||e)); sel.value = prev||"pending"; }
   });
   $$(".odetail").forEach(b=> b.onclick=()=>{ const o=_orders.find(x=>x.code===b.dataset.code); if(o) orderModal(o); });
 }
@@ -250,9 +1034,36 @@ function orderModal(o){
 /* ---------------- SẢN PHẨM ---------------- */
 let _products=[];
 async function renderProducts(){
+  // chỉ fetch khi cần (vào tab lần đầu, hoặc seed/refresh thủ công)
   const c=$("#adminContent");
   c.innerHTML=`<div class="empty-state">Đang tải sản phẩm…</div>`;
   _products = await DB.listProducts({adminAll:true});
+  drawProducts();
+}
+function productRowHTML(p){
+  return `<tr data-pid="${esc(p.id)}">
+    <td><div class="pthumb">${thumb(p)}</div></td>
+    <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px">${esc(p.collection||"")}</div></td>
+    <td>${esc(p.catName||p.catKey)}</td>
+    <td><b>${money(p.price)}</b>${p.compare>p.price?`<div class="muted" style="font-size:11.5px;text-decoration:line-through">${money(p.compare)}</div>`:""}</td>
+    <td style="${p.stock<=0?'color:var(--sale);font-weight:700':''}">${p.stock}</td>
+    <td style="font-variant-numeric:tabular-nums" title="Đã bán thật (chỉ admin thấy)"><b>${p.sold_real||0}</b><div class="muted" style="font-size:11.5px">ảo: ${p.sold||0}</div></td>
+    <td style="font-variant-numeric:tabular-nums">${p.likes||0}</td>
+    <td><button type="button" class="switch ptoggle ${p.active!==false?'on':''}" data-id="${esc(p.id)}" aria-label="${p.active!==false?'Đang hiện — bấm để ẩn':'Đang ẩn — bấm để hiện'}">
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+      <span class="switch-label">${p.active!==false?"Hiện":"Ẩn"}</span>
+    </button></td>
+    <td style="white-space:nowrap">
+      <a class="mini" href="../product.html?id=${encodeURIComponent(p.id)}" target="_blank" rel="noopener" title="Xem trang khách">👁 Xem</a>
+      <button class="mini pedit" data-id="${esc(p.id)}">Sửa</button>
+      <button class="mini danger pdel" data-id="${esc(p.id)}">Xoá</button>
+    </td>
+  </tr>`;
+}
+function drawProducts(){
+  // Vẽ lại UI từ _products local — không fetch DB. Action ẩn/hiện/xoá/sửa
+  // cập nhật _products tại chỗ rồi gọi hàm này để tránh nháy & gọi mạng thừa.
+  const c=$("#adminContent");
   c.innerHTML=`
   <div class="admin-head"><h1>Sản phẩm (${_products.length})</h1>
     <div class="admin-actions">
@@ -261,30 +1072,54 @@ async function renderProducts(){
     </div>
   </div>
   ${_products.length? `<div class="tablewrap"><table class="tbl">
-    <thead><tr><th>Ảnh</th><th>Tên</th><th>Danh mục</th><th>Giá</th><th>Tồn</th><th>Đã bán</th><th>♥</th><th>Hiện</th><th></th></tr></thead>
-    <tbody>${_products.map(p=>`<tr>
-      <td><div class="pthumb">${thumb(p)}</div></td>
-      <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px">${esc(p.collection||"")}</div></td>
-      <td>${esc(p.catName||p.catKey)}</td>
-      <td><b>${money(p.price)}</b>${p.compare>p.price?`<div class="muted" style="font-size:11.5px;text-decoration:line-through">${money(p.compare)}</div>`:""}</td>
-      <td style="${p.stock<=0?'color:var(--sale);font-weight:700':''}">${p.stock}</td>
-      <td style="font-variant-numeric:tabular-nums">${p.sold||0}</td>
-      <td style="font-variant-numeric:tabular-nums">${p.likes||0}</td>
-      <td><span class="pill ${p.active!==false?'tag-on':'tag-off'}">${p.active!==false?"Hiện":"Ẩn"}</span></td>
-      <td style="white-space:nowrap">
-        <button class="mini pedit" data-id="${esc(p.id)}">Sửa</button>
-        <button class="mini danger pdel" data-id="${esc(p.id)}">Xoá</button>
-      </td>
-    </tr>`).join("")}</tbody></table></div>`
+    <thead><tr><th>Ảnh</th><th>Tên</th><th>Danh mục</th><th>Giá</th><th>Tồn</th><th>Bán thật / ảo</th><th>♥</th><th>Hiện</th><th></th></tr></thead>
+    <tbody>${_products.map(productRowHTML).join("")}</tbody></table></div>`
     : `<div class="empty-state">Chưa có sản phẩm.<br><br>Bấm <b>Nhập dữ liệu mẫu</b> để có sẵn 30 sản phẩm demo, hoặc <b>Thêm sản phẩm</b>.</div>`}`;
-
-  const sb=$("#seedBtn"); if(sb) sb.onclick=async()=>{ sb.disabled=true; sb.textContent="Đang nhập…"; try{ const n=await DB.seedDemo(); toast("Đã nhập "+n+" sản phẩm"); renderProducts(); }catch(e){ toast("Lỗi: "+(e.message||e)); sb.disabled=false; sb.textContent="⬇ Nhập dữ liệu mẫu"; } };
+  bindProductRowActions();
+}
+function bindProductRowActions(){
+  const sb=$("#seedBtn"); if(sb) sb.onclick=async()=>{ sb.disabled=true; sb.textContent="Đang nhập…"; try{ await DB.seedDemo(); _products = await DB.listProducts({adminAll:true}); toast("Đã nhập "+_products.length+" sản phẩm"); drawProducts(); }catch(e){ toast("Lỗi: "+(e.message||e)); sb.disabled=false; sb.textContent="⬇ Nhập dữ liệu mẫu"; } };
   $("#addBtn").onclick=()=>productModal(null);
   $$(".pedit").forEach(b=> b.onclick=()=>productModal(_products.find(p=>p.id===b.dataset.id)));
   $$(".pdel").forEach(b=> b.onclick=async()=>{
     const p=_products.find(x=>x.id===b.dataset.id);
-    if(!confirm("Xoá sản phẩm \""+(p?.name||"")+"\"?")) return;
-    try{ await DB.deleteProduct(b.dataset.id); toast("Đã xoá"); renderProducts(); }catch(e){ toast("Lỗi: "+(e.message||e)); }
+    const ok = await confirmDialog({
+      title:"Xoá sản phẩm?",
+      body:`Sản phẩm "<b>${esc(p?.name||"")}</b>" sẽ bị xoá vĩnh viễn. Hành động này không thể hoàn tác.`,
+      confirmText:"Xoá", cancelText:"Huỷ", danger:true,
+    });
+    if(!ok) return;
+    try{
+      await DB.deleteProduct(b.dataset.id);
+      // Xoá khỏi mảng local rồi vẽ lại — không refetch toàn bộ
+      const idx = _products.findIndex(x=>x.id===b.dataset.id);
+      if(idx>=0) _products.splice(idx,1);
+      toast("Đã xoá"); drawProducts();
+    }catch(e){ toast("Lỗi: "+(e.message||e)); }
+  });
+  $$(".ptoggle").forEach(sw=> sw.onclick=async()=>{
+    const p=_products.find(x=>x.id===sw.dataset.id); if(!p) return;
+    const wasActive = p.active!==false;
+    const ok = await confirmDialog({
+      title: wasActive ? "Ẩn sản phẩm?" : "Hiện sản phẩm?",
+      body: wasActive
+        ? `Sản phẩm "<b>${esc(p.name)}</b>" sẽ ẩn khỏi cửa hàng. Khách không thấy nữa cho tới khi bạn bật lại.`
+        : `Sản phẩm "<b>${esc(p.name)}</b>" sẽ hiện lại trên cửa hàng.`,
+      confirmText: wasActive ? "Ẩn" : "Hiện",
+      danger: wasActive,
+    });
+    if(!ok) return;
+    sw.disabled=true;
+    try{
+      const saved = await DB.upsertProduct({...p, active: !wasActive});
+      // Merge data trả về (giữ field tính toán như catName từ map) lên item local
+      Object.assign(p, saved || {}, {active: !wasActive});
+      toast(wasActive ? "Đã ẩn sản phẩm" : "Đã hiện sản phẩm");
+      // Chỉ vẽ lại đúng row thay vì cả bảng để tránh nháy
+      const tr = $(`tr[data-pid="${CSS.escape(p.id)}"]`);
+      if(tr){ tr.outerHTML = productRowHTML(p); bindProductRowActions(); }
+      else drawProducts();
+    }catch(e){ toast("Lỗi: "+(e.message||e)); sw.disabled=false; }
   });
 }
 
@@ -302,13 +1137,12 @@ function productModal(p){
   const sizeBoxes = SIZES_ALL.map(s=>`<label><input type="checkbox" value="${s}" ${(p.sizes||[]).includes(s)?"checked":""}> ${s}</label>`).join("");
 
   openModal(`<h3 class="modal-title">${editing?"Sửa":"Thêm"} sản phẩm</h3>
-    <form id="pform">
+    <form id="pform" novalidate>
       <div class="frow">
         <label class="fld" style="grid-column:span 2"><span>Tên sản phẩm *</span><input name="name" value="${esc(p.name)}" required></label>
       </div>
       <div class="frow">
-        <label class="fld"><span>Chữ in / slogan (ảnh tự sinh khi thiếu ảnh)</span><input name="print" value="${esc(p.print||"")}" placeholder="VD: POUR OVER"></label>
-        <label class="fld"><span>Danh mục *</span><select name="catKey">${catOpts}</select></label>
+        <label class="fld" style="grid-column:span 2"><span>Danh mục *</span><select name="catKey">${catOpts}</select></label>
       </div>
       <div class="frow">
         <label class="fld"><span>Bộ sưu tập</span><input name="collection" list="cols" value="${esc(p.collection||"")}"><datalist id="cols">${colList}</datalist></label>
@@ -319,7 +1153,8 @@ function productModal(p){
         <label class="fld"><span>Giá gốc (₫)</span><input name="compare" type="number" min="0" value="${p.compare||0}"></label>
       </div>
       <div class="frow">
-        <label class="fld"><span>Đã bán (số ảo)</span><input name="sold" type="number" min="0" value="${p.sold||0}" placeholder="VD: 250"></label>
+        <label class="fld"><span>Đã bán — ẢO (hiển thị khách)</span><input name="sold" type="number" min="0" value="${p.sold||0}" placeholder="VD: 1234"></label>
+        <label class="fld"><span>Đã bán — THẬT (nội bộ)</span><input name="sold_real" type="number" min="0" value="${p.sold_real||0}" placeholder="VD: 87"></label>
         <label class="fld"><span>Yêu thích (số ảo)</span><input name="likes" type="number" min="0" value="${p.likes||0}" placeholder="VD: 42"></label>
       </div>
       <div class="fld"><span>Màu sắc & ảnh theo màu
@@ -330,20 +1165,32 @@ function productModal(p){
       <div class="fld"><span>Kích cỡ</span><div class="sizebox" id="sizes">${sizeBoxes}</div></div>
       <label class="fld" style="display:flex;align-items:center;gap:8px;flex-direction:row">
         <input type="checkbox" name="active" ${p.active!==false?"checked":""} style="width:18px;height:18px"> <span style="margin:0">Hiển thị trên cửa hàng</span></label>
-      <button class="btn btn-dark btn-block" type="submit" id="psave">${editing?"Lưu thay đổi":"Thêm sản phẩm"}</button>
+      <div class="modal-foot">
+        <button class="btn btn-dark btn-block" type="submit" id="psave">${editing?"Lưu thay đổi":"Thêm sản phẩm"}</button>
+      </div>
     </form>`,"wide");
 
   function drawVariants(){
     const root=$("#variants");
-    root.innerHTML = variants.map((v,vi)=>`
+    const palette = (S.COLORS||[]).filter(c=>c.active!==false);
+    root.innerHTML = variants.map((v,vi)=>{
+      const matched = palette.find(c=>c.hex.toLowerCase()===String(v.color||"").toLowerCase());
+      const nameLabel = matched ? matched.name : "(màu tự nhập)";
+      const swatches = palette.map(c=>{
+        const on = c.hex.toLowerCase()===String(v.color||"").toLowerCase();
+        return `<button type="button" class="vswatch ${on?"on":""}" data-vi="${vi}" data-hex="${esc(c.hex)}" style="background:${safeColor(c.hex)}" title="${esc(c.name)}" aria-label="${esc(c.name)}"></button>`;
+      }).join("");
+      return `
       <div class="variant">
         <div class="variant-head">
-          <input type="color" class="vcolor" value="${v.color}" data-vi="${vi}" title="Đổi màu">
+          <input type="color" class="vcolor" value="${safeColor(v.color)}" data-vi="${vi}" title="Tự nhập hex">
           <code class="muted" style="font-size:12px">${esc(v.color)}</code>
+          <b style="font-size:13px">${esc(nameLabel)}</b>
           <span class="muted" style="font-size:12px">· ${v.imgs.length} ảnh</span>
           <span style="flex:1"></span>
           <button type="button" class="mini danger vdel" data-vi="${vi}" ${variants.length<=1?'disabled':''}>Xoá màu</button>
         </div>
+        ${palette.length?`<div class="vpalette" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px">${swatches}</div>`:""}
         <div class="img-gallery">
           ${v.imgs.map((url,ii)=>`
             <div class="img-tile ${ii===0?'is-main':''}">
@@ -357,8 +1204,10 @@ function productModal(p){
             </div>`).join("")}
           <label class="img-drop vdrop"><span>＋ Thêm ảnh</span><input type="file" class="vfile" data-vi="${vi}" accept="image/*" multiple hidden></label>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
 
+    $$(".vswatch",root).forEach(b=> b.onclick=()=>{ variants[+b.dataset.vi].color=b.dataset.hex; drawVariants(); });
     $$(".vcolor",root).forEach(inp=> inp.oninput=()=>{ variants[+inp.dataset.vi].color=inp.value; drawVariants(); });
     $$(".vdel",root).forEach(b=> b.onclick=()=>{ if(variants.length>1){ variants.splice(+b.dataset.vi,1); drawVariants(); } });
     $$(".img-btn",root).forEach(b=> b.onclick=()=>{
@@ -376,30 +1225,61 @@ function productModal(p){
     });
   }
   drawVariants();
-  $("#addColor").onclick=()=>{ variants.push({color:"#888888",imgs:[]}); drawVariants(); };
+  $("#addColor").onclick=()=>{
+    // Gợi ý màu kế tiếp từ palette mà variant hiện chưa dùng
+    const used = new Set(variants.map(v=>String(v.color||"").toLowerCase()));
+    const palette = (S.COLORS||[]).filter(c=>c.active!==false);
+    const next = palette.find(c=>!used.has(c.hex.toLowerCase())) || palette[0];
+    variants.push({color: next?next.hex:"#888888", imgs:[]});
+    drawVariants();
+  };
 
   $("#pform").onsubmit=async(e)=>{
     e.preventDefault(); const f=e.target;
-    if(!f.name.value.trim()){ toast("Nhập tên sản phẩm"); return; }
+    const ok = validateFields([
+      {el:f.name,  msg:"Nhập tên sản phẩm"},
+      {el:f.price, msg:"Giá bán phải lớn hơn 0", test:v=> (+v)>0},
+    ]);
+    if(!ok) return;
     const sizes=$$("#sizes input:checked").map(x=>x.value);
     const colors = variants.map(v=>v.color);
     const color_images = {}; variants.forEach(v=>{ if(v.imgs.length) color_images[v.color]=v.imgs.slice(); });
     const images = variants.flatMap(v=>v.imgs);
+    const setVariantErr = (msg)=>{
+      const block = $("#variants");
+      let oe = block && block.parentNode.querySelector(".opt-error.variantErr");
+      if(msg){
+        if(!oe){ oe=document.createElement("div"); oe.className="opt-error variantErr"; block.parentNode.insertBefore(oe, block.nextSibling); }
+        oe.textContent = msg;
+        block.scrollIntoView({block:"center",behavior:"smooth"});
+      } else if(oe){ oe.remove(); }
+    };
     if(!editing){
-      if(variants.some(v=>!v.imgs.length)){ toast("Mỗi màu cần ít nhất 1 ảnh của màu đó"); return; }
-      if(images.length<3){ toast("Cần tối thiểu 3 ảnh khi thêm sản phẩm mới"); return; }
+      if(variants.some(v=>!v.imgs.length)){ setVariantErr("Mỗi màu cần ít nhất 1 ảnh của màu đó"); return; }
+      if(images.length<3){ setVariantErr("Cần tối thiểu 3 ảnh khi thêm sản phẩm mới"); return; }
+      setVariantErr("");
     }
     const prod={
-      ...(editing?{id:p.id}:{}),
-      name:f.name.value.trim(), print:f.print.value.trim(),
+      ...(editing?{id:p.id, print:p.print||""}:{print:""}),
+      name:f.name.value.trim(),
       catKey:f.catKey.value, collection:f.collection.value.trim(),
       price:+f.price.value||0, compare:+f.compare.value||0, stock:+f.stock.value||0,
-      sold:+f.sold.value||0, likes:+f.likes.value||0,
+      sold:+f.sold.value||0, sold_real:+f.sold_real.value||0, likes:+f.likes.value||0,
       colors, sizes:sizes.length?sizes:["Freesize"],
       images, color_images, image_url:images[0]||null, active:f.active.checked,
     };
     const btn=$("#psave"); btn.disabled=true; btn.textContent="Đang lưu…";
-    try{ await DB.upsertProduct(prod); toast("Đã lưu sản phẩm"); closeModal(); renderProducts(); }
+    try{
+      const saved = await DB.upsertProduct(prod);
+      // Cập nhật _products local thay vì refetch — tránh nháy danh sách
+      if(editing){
+        const idx = _products.findIndex(x=>x.id===p.id);
+        if(idx>=0) _products[idx] = saved || {..._products[idx], ...prod};
+      } else if(saved){
+        _products.unshift(saved);
+      }
+      toast("Đã lưu sản phẩm"); closeModal(); drawProducts();
+    }
     catch(err){ console.error(err); toast("Lỗi: "+(err.message||err)); btn.disabled=false; btn.textContent=editing?"Lưu thay đổi":"Thêm sản phẩm"; }
   };
 }

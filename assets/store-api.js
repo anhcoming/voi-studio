@@ -10,7 +10,7 @@
   const supa = hasKeys ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
   const MODE = supa ? "cloud" : "local";
 
-  const LS = { products:"originals_products_v1", orders:"originals_orders_v1", admin:"originals_admin_v1", categories:"originals_categories_v1" };
+  const LS = { products:"originals_products_v1", orders:"originals_orders_v1", admin:"originals_admin_v1", categories:"originals_categories_v1", colors:"originals_colors_v1", settings:"originals_settings_v1" };
   const read  = (k,d)=>{ try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch(e){ return d; } };
   const write = (k,v)=> localStorage.setItem(k, JSON.stringify(v));
 
@@ -57,7 +57,8 @@
       print: row.print||row.name, price: +row.price||0, compare: +row.compare||0,
       colors, sizes: row.sizes||["S","M","L","XL"],
       stock: row.stock==null?0:+row.stock,
-      sold: row.sold==null?0:+row.sold,
+      sold: row.sold==null?0:+row.sold,         // ẢO — hiển thị cho khách
+      sold_real: row.sold_real==null?0:+row.sold_real,  // THẬT — chỉ admin
       likes: row.likes==null?0:+row.likes,
       images, color_images, image_url: pickMainImage(colors, color_images, images),
       active: row.active!==false, sort: +row.sort||0,
@@ -74,6 +75,7 @@
       colors, sizes:p.sizes||["S","M","L","XL"],
       stock:p.stock==null?0:+p.stock,
       sold:p.sold==null?0:+p.sold,
+      sold_real:p.sold_real==null?0:+p.sold_real,
       likes:p.likes==null?0:+p.likes,
       images, color_images, image_url: pickMainImage(colors, color_images, images),
       active:p.active!==false, sort:+p.sort||0,
@@ -146,7 +148,7 @@
         // Loại bỏ tuần tự từng column missing đến khi insert thành công.
         let attempt = { ...row };
         // Match cụ thể từng column thay vì loop mù: nếu err báo column khác, nhảy qua.
-        const COLS_TO_TRY = ["color_images","images","sold","likes"];
+        const COLS_TO_TRY = ["color_images","images","sold","sold_real","likes"];
         let guard = 0;
         while(error && guard++ < COLS_TO_TRY.length){
           const msg = (error.message||"");
@@ -212,6 +214,63 @@
     async deleteCategory(key){
       if(this.cloud){ const {error}=await supa.from("categories").delete().eq("key",key); if(error) throw error; return; }
       write(LS.categories, read(LS.categories,[]).filter(c=>c.key!==key));
+    },
+
+    /* ============ MÀU SẮC ============ */
+    async listColors(){
+      if(this.cloud){
+        const {data,error}=await supa.from("colors").select("*").order("sort",{ascending:true});
+        if(error){ console.warn("listColors",error.message); return []; }
+        return (data||[]).filter(c=>c.active!==false);
+      }
+      let arr = read(LS.colors, null);
+      if(!arr){ arr = (window.STORE.COLORS||[]).map(c=>({...c})); write(LS.colors, arr); }
+      return arr.filter(c=>c.active!==false).sort((a,b)=>(a.sort||0)-(b.sort||0));
+    },
+    async listColorsAll(){
+      if(this.cloud){
+        const {data,error}=await supa.from("colors").select("*").order("sort",{ascending:true});
+        if(error){ console.warn("listColorsAll",error.message); return []; }
+        return data||[];
+      }
+      let arr = read(LS.colors, null);
+      if(!arr){ arr = (window.STORE.COLORS||[]).map(c=>({...c})); write(LS.colors, arr); }
+      return arr.slice().sort((a,b)=>(a.sort||0)-(b.sort||0));
+    },
+    async upsertColor(col){
+      const row = { key:col.key, name:col.name, hex:col.hex, sort:+col.sort||0, active:col.active!==false };
+      if(this.cloud){
+        const {data,error}=await supa.from("colors").upsert(row,{onConflict:"key"}).select().single();
+        if(error) throw error; return data;
+      }
+      const arr = read(LS.colors, []);
+      const i = arr.findIndex(c=>c.key===row.key);
+      if(i>=0) arr[i]={...arr[i],...row}; else arr.push(row);
+      write(LS.colors, arr); return row;
+    },
+    async deleteColor(key){
+      if(this.cloud){ const {error}=await supa.from("colors").delete().eq("key",key); if(error) throw error; return; }
+      write(LS.colors, read(LS.colors,[]).filter(c=>c.key!==key));
+    },
+
+    /* ============ SITE SETTINGS (key/value jsonb) ============ */
+    async getSettings(key){
+      if(this.cloud){
+        const {data,error} = await supa.from("site_settings").select("value").eq("key",key).maybeSingle();
+        if(error){ console.warn("getSettings",error.message); return null; }
+        return data ? data.value : null;
+      }
+      const all = read(LS.settings, {});
+      return all[key] ?? null;
+    },
+    async saveSettings(key, value){
+      if(this.cloud){
+        const {error} = await supa.from("site_settings").upsert({key, value}, {onConflict:"key"});
+        if(error) throw error; return;
+      }
+      const all = read(LS.settings, {});
+      all[key] = value;
+      write(LS.settings, all);
     },
 
     /* ============ ẢNH ============ */
