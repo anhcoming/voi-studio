@@ -200,3 +200,133 @@ EMAILJS_TEMPLATE_ID: "template_xxxxxxx",
 - **Vẫn cho phép guest checkout:** khách không cần đăng nhập vẫn đặt được đơn (nhận mã `OR…` để tra cứu sau).
 - **Prefill:** modal checkout tự điền tên (từ Google) và SĐT/địa chỉ từ lần đặt gần nhất trên máy.
 - **Chỉ chạy được ở chế độ cloud** — chế độ demo (`localStorage`) chỉ giả lập một user "Khách Demo" để xem UI.
+
+---
+
+## I. Tích hợp Giao Hàng Nhanh (GHN)
+
+> Tích hợp này gồm 3 lớp: **(1) chạy migration SQL** để DB có cột GHN
+> · **(2) deploy Edge Function** `ghn-proxy` (proxy bảo mật — token GHN
+> KHÔNG nằm ở frontend) · **(3) cấu hình shop origin** trong DB.
+> Sau khi xong, checkout sẽ tự tính phí ship thật theo địa chỉ, admin có
+> nút "Tạo đơn GHN" trong từng đơn.
+
+### Bước 1 — Đăng ký tài khoản GHN
+1. Vào https://5sao.ghn.dev → **Đăng ký doanh nghiệp** (cần MST hoặc CCCD).
+2. Sau khi kích hoạt → vào https://khachhang.ghn.vn → **Cài đặt → Cấu hình API**.
+3. Copy 2 giá trị:
+   - **Token** (1 chuỗi UUID dài, ví dụ `4a1f...`)
+   - **ShopID** (số nguyên, ví dụ `12345` — tương ứng kho lấy hàng).
+
+> **Test trước khi production:** GHN có môi trường dev tại
+> `dev-online-gateway.ghn.vn`. Token & ShopID dev khác prod. Set
+> `GHN_ENV=dev` để dùng sandbox (xem Bước 3).
+
+### Bước 2 — Chạy migration SQL
+Mở Supabase Dashboard → **SQL Editor** → **New query** → dán toàn bộ nội
+dung `supabase/migration-ghn.sql` → Run.
+
+Migration sẽ tạo:
+- Cột `ghn_order_code`, `ghn_status`, `ghn_fee`… trên bảng `orders`.
+- Bảng `ghn_address_map` (cache mapping địa chỉ VN ↔ GHN ID).
+- Bảng `ghn_tracking_events` (timeline tracking).
+- RPC `get_tracking_by_code(p_code)` để khách tra cứu (chưa dùng v1).
+- 1 dòng `ghn_config` mặc định trong `site_settings`.
+
+### Bước 3 — Deploy Edge Function `ghn-proxy`
+Cần Supabase CLI (https://supabase.com/docs/guides/cli):
+```bash
+# Lần đầu: link project local với project Supabase
+supabase link --project-ref kpwofxgnurgfjnigsdea   # <project-ref> trong URL
+
+# Deploy function (--no-verify-jwt vì frontend gọi với cả anon key)
+supabase functions deploy ghn-proxy --no-verify-jwt
+
+# Set secrets (token sẽ chỉ ở Supabase, không bao giờ lộ ra frontend)
+supabase secrets set \
+  GHN_TOKEN=<token-từ-GHN> \
+  GHN_SHOP_ID=<shop-id> \
+  GHN_ENV=prod
+```
+
+> `GHN_ENV=dev` ➜ trỏ sang sandbox. Khi sẵn sàng go-live: đổi sang `prod`
+> và set lại token/shop-id của tài khoản chính thức.
+
+### Bước 4 — Cấu hình shop origin (kho gửi hàng)
+Vào Supabase Dashboard → **Table Editor → site_settings** → tìm dòng
+`key = "ghn_config"` → cột `value` (JSONB) → bấm Edit và sửa:
+
+```json
+{
+  "enabled": true,
+  "shop_id": 12345,
+  "from_name": "VOISTUDIO",
+  "from_phone": "0987xxxxxx",
+  "from_address": "Số 1, Đường ABC, Phường XYZ",
+  "from_district_id": 1542,
+  "from_ward_code": "21211",
+  "from_province_name": "Hà Nội",
+  "from_district_name": "Quận Cầu Giấy",
+  "from_ward_name": "Phường Dịch Vọng",
+  "default_weight": 300,
+  "default_length": 25,
+  "default_width": 20,
+  "default_height": 5,
+  "service_type_id": 2,
+  "payment_type_id": 2,
+  "required_note": "KHONGCHOXEMHANG"
+}
+```
+
+**Cách tìm `from_district_id` và `from_ward_code`** (GHN dùng ID nội bộ
+của họ, KHÔNG phải mã của Bộ Nội vụ):
+- Mở terminal, gọi edge function với action `master`:
+  ```bash
+  curl -X POST https://kpwofxgnurgfjnigsdea.supabase.co/functions/v1/ghn-proxy \
+    -H "Authorization: Bearer <SUPABASE_ANON_KEY>" \
+    -H "Content-Type: application/json" \
+    -d '{"action":"master","type":"province"}'
+  ```
+- Tìm `ProvinceID` của tỉnh shop → lặp lại với `type=district` (kèm
+  `province_id`) → rồi `type=ward` (kèm `district_id`).
+- Điền `ProvinceID`/`DistrictID`/`WardCode` vào JSON tương ứng.
+
+> **Mẹo:** tạm thời để `from_district_id = 1542`, `from_ward_code = "21211"`
+> (Cầu Giấy, HN — kho mẫu của GHN trong docs) để test thử trước, rồi mới
+> điền địa chỉ thật.
+
+### Các giá trị quan trọng cần biết
+| Field | Giá trị | Ý nghĩa |
+|---|---|---|
+| `service_type_id` | `2` | Chuẩn (Standard). `1` = Express |
+| `payment_type_id` | `2` | Người nhận trả phí. `1` = Shop trả |
+| `required_note` | `KHONGCHOXEMHANG` | Khách KHÔNG được xem hàng. Khác: `CHOXEMHANGKHONGTHU`, `CHOTHUHANG` |
+| `default_weight` | `300` (g) | Cân nặng mặc định 1 đơn |
+
+### Bước 5 — Test
+1. Refresh trang giỏ hàng → chọn đủ địa chỉ 3 cấp (mode "old") → dòng
+   "Phí giao hàng" sẽ đổi từ `30.000đ` (flat) → giá thật từ GHN, kèm
+   nhãn `(GHN)`. Nếu vẫn flat: mở DevTools → Console xem log lỗi.
+2. Đặt 1 đơn test → vào `/admin` → mở đơn → bấm **"Tạo đơn GHN"** →
+   GHN sẽ trả về mã vận đơn → click **↗ Tracking** xem trạng thái thật.
+3. Bấm **"↻ Cập nhật trạng thái"** để pull status mới nhất.
+
+### Lưu ý vận hành
+- **Phí ship hiển thị cho khách** = phí GHN tính được, KHÔNG có ngưỡng
+  freeship 500k nữa (vì giá đã thật). Muốn giữ freeship: set
+  `GHN.enabled = false` tạm thời trong `ghn-client.js`, hoặc sửa logic
+  `recomputeShipping` trong `assets/app.js`.
+- **Đơn mode "new" (2-cấp)**: vì GHN vẫn dùng 3-cấp, các đơn này sẽ
+  giữ flat fee. Admin push thủ công, edge function tự resolve dựa trên
+  tên xã.
+- **Webhook** (cập nhật status tự động khi GHN giao hàng) chưa làm ở v1.
+  Tạm thời admin bấm "↻ Cập nhật trạng thái" để pull. Webhook GHN sẽ
+  POST sang `https://<project>.supabase.co/functions/v1/ghn-webhook` —
+  cần thêm 1 edge function nữa nếu muốn realtime.
+- **Cache mapping địa chỉ**: lần đầu tính phí cho 1 xã sẽ chậm (~500ms)
+  vì call 3 API GHN. Sau đó cache trong `ghn_address_map` → các lần
+  sau gần như tức thời.
+- **Bảo mật token**: `GHN_TOKEN` nằm trong Supabase secrets, frontend
+  CHỈ thấy URL function. Ai cũng có thể gọi action `fee` (an toàn —
+  GHN không tính tiền cho query), nhưng `create`/`cancel` yêu cầu JWT
+  admin (verify trong edge function).

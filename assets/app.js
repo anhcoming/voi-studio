@@ -1219,8 +1219,13 @@ async function renderCart(){
       return;
     }
     const sub = Cart.subtotal();
-    const ship = sub>=500000 || sub===0 ? 0 : 30000;
-    const total = sub+ship;
+    // Phí ship động: bắt đầu bằng flat fee (fallback nếu GHN tắt/lỗi).
+    // Sẽ được recompute khi user chọn đủ địa chỉ qua GHN.fee().
+    const FLAT_SHIP = 30000;
+    const ghnEnabled = !!(window.GHN && window.GHN.enabled);
+    let ship = sub>=500000 || sub===0 ? 0 : FLAT_SHIP;
+    let total = sub+ship;
+    let shipSource = "flat"; // "flat" | "ghn"
     const last = getLastContact() || {};
     const draft = loadCheckoutDraft() || {};
     // Ưu tiên: draft đang gõ → địa chỉ default đã lưu → lastContact → Auth
@@ -1322,10 +1327,12 @@ async function renderCart(){
       <aside class="cart-summary">
         <h3 class="cart-section-title">💰 Tóm tắt đơn hàng</h3>
         <div class="line"><span>Tạm tính</span><span>${money(sub)}</span></div>
-        <div class="line"><span>Phí giao hàng</span><span>${ship?money(ship):"Miễn phí"}</span></div>
-        ${sub<500000?`<div class="line" style="color:var(--sale);font-size:12.5px">Mua thêm ${money(500000-sub)} để được freeship</div>`:``}
+        <div class="line"><span id="ckShipLabel">Phí giao hàng</span><span id="ckShipValue">${ship?money(ship):"Miễn phí"}</span></div>
+        <div id="ckShipHint" class="line" style="color:var(--sale);font-size:12.5px;${sub<500000?'':'display:none'}">
+          ${sub<500000?`Mua thêm ${money(500000-sub)} để được freeship`:``}
+        </div>
         <div class="line" style="font-size:12px;color:var(--muted);margin-top:6px"><span>Hình thức</span><span>COD</span></div>
-        <div class="total"><span>Tổng cộng</span><span class="cart-total-amount">${money(total)}</span></div>
+        <div class="total"><span>Tổng cộng</span><span class="cart-total-amount" id="ckTotal">${money(total)}</span></div>
         <button class="btn btn-dark btn-block" type="submit" form="ckForm" id="ckSubmit" style="margin-top:14px">Đặt hàng (COD)</button>
         <a class="btn btn-outline btn-block" href="collection.html" style="margin-top:10px">Tiếp tục mua sắm</a>
         <p class="muted" style="font-size:11.5px;text-align:center;margin-top:8px">Thanh toán khi nhận hàng • ${DB.cloud?"Đơn lưu trên hệ thống":"Chế độ demo"}</p>
@@ -1340,7 +1347,58 @@ async function renderCart(){
       draw(savedAddrs);
     });
     const ckLogin=$("#ckLogin"); if(ckLogin) ckLogin.onclick=(e)=>{ e.preventDefault(); openLoginModal(); };
-    bindAddressPicker(prefillStruct);
+
+    /* ---- Tính phí ship động qua GHN khi đủ địa chỉ ---- */
+    let _shipReqId = 0;  // tránh race giữa các request liên tiếp
+    async function recomputeShipping(st){
+      const labelEl = $("#ckShipLabel"), valEl = $("#ckShipValue"),
+            hintEl = $("#ckShipHint"), totEl = $("#ckTotal");
+      if(!labelEl) return;  // trang đã bị re-render
+      const setShip = (v, source, note="")=>{
+        ship = v; total = sub + v; shipSource = source;
+        valEl.textContent = v ? money(v) : "Miễn phí";
+        labelEl.textContent = note ? `Phí giao hàng (${note})` : "Phí giao hàng";
+        totEl.textContent = money(total);
+        // Freeship hint: ẩn nếu đã có ship động (GHN trả giá thật, không áp ngưỡng 500k)
+        if(source === "ghn" || sub >= 500000){
+          hintEl.style.display = "none";
+        } else {
+          hintEl.style.display = "";
+          hintEl.innerHTML = `Mua thêm ${money(500000-sub)} để được freeship`;
+        }
+      };
+      // Freeship vẫn ưu tiên: đơn ≥ 500k → 0đ (chính sách shop)
+      if(sub >= 500000){ setShip(0, "flat", "freeship"); return; }
+      // Chưa bật GHN hoặc chưa đủ địa chỉ → flat fee
+      if(!ghnEnabled || !st || !st.p || !st.d || !st.w){
+        setShip(FLAT_SHIP, "flat"); return;
+      }
+      // Gọi GHN; giữ flat trong lúc chờ
+      const myReq = ++_shipReqId;
+      labelEl.textContent = "Phí giao hàng (đang tính…)";
+      try{
+        const r = await GHN.fee({
+          province_name: st.p.name,
+          district_name: st.d.name,
+          ward_name:     st.w.name,
+        });
+        if(myReq !== _shipReqId) return;  // có request mới đè lên
+        setShip(+r.total || FLAT_SHIP, "ghn", "GHN");
+      }catch(e){
+        if(myReq !== _shipReqId) return;
+        console.warn("[GHN.fee] lỗi → fallback flat:", e.message);
+        setShip(FLAT_SHIP, "flat");
+      }
+    }
+    bindAddressPicker(prefillStruct, recomputeShipping);
+    // Nếu prefill đã có đủ địa chỉ (3 cấp) → tính ngay
+    if(prefillStruct && prefillStruct.province_code && prefillStruct.district_code && prefillStruct.ward_code){
+      recomputeShipping({
+        p:{ code:prefillStruct.province_code, name:prefillStruct.province_name },
+        d:{ code:prefillStruct.district_code, name:prefillStruct.district_name },
+        w:{ code:prefillStruct.ward_code,     name:prefillStruct.ward_name },
+      });
+    }
 
     // Click 1 saved-addr → fill toàn bộ form
     $$(".saved-addr-item").forEach(b=> b.onclick=()=>{
@@ -1349,7 +1407,14 @@ async function renderCart(){
       f.name.value = a.recipient || "";
       f.phone.value = a.phone || "";
       $("#addrStreet").value = a.street || "";
-      bindAddressPicker(a);
+      bindAddressPicker(a, recomputeShipping);
+      if(a.province_code && a.district_code && a.ward_code){
+        recomputeShipping({
+          p:{ code:a.province_code, name:a.province_name },
+          d:{ code:a.district_code, name:a.district_name },
+          w:{ code:a.ward_code,     name:a.ward_name },
+        });
+      }
       $$(".saved-addr-item").forEach(x=>x.classList.toggle("active", x===b));
       toast("Đã chọn địa chỉ");
     });
@@ -1566,11 +1631,12 @@ function openAddrPicker(title, list, onSelect){
 let _addrPickerState = null;
 function getAddressState(){ return _addrPickerState; }
 
-function bindAddressPicker(prefill){
+function bindAddressPicker(prefill, onChange){
   const pBtn = $("#addrPBtn"), dBtn = $("#addrDBtn"), wBtn = $("#addrWBtn");
   const streetInp = $("#addrStreet"), addrInp = $("#addrInput");
   const state = { p: null, d: null, w: null };
   _addrPickerState = state;
+  const fire = ()=>{ if(typeof onChange==="function") try{ onChange(state); }catch(e){} };
   // Mặc định "new" (34 tỉnh, 2 cấp); user toggle sang "old" để chọn theo 3 cấp.
   let mode = "new";
   const setLabel = (btn, txt, active)=>{
@@ -1619,7 +1685,7 @@ function bindAddressPicker(prefill){
           setLabel(dBtn, "Chọn", false); dBtn.disabled = false;
           setLabel(wBtn, "Chọn", false); wBtn.disabled = true;
         }
-        syncFinal();
+        syncFinal(); fire();
       });
     }catch(e){ loadingBtn(pBtn, false); toast("Lỗi tải danh sách tỉnh"); }
   };
@@ -1633,7 +1699,7 @@ function bindAddressPicker(prefill){
         state.d = item; state.w = null;
         setLabel(dBtn, item.name, true);
         setLabel(wBtn, "Phường/Xã", false); wBtn.disabled = false;
-        syncFinal();
+        syncFinal(); fire();
       });
     }catch(e){ loadingBtn(dBtn, false); toast("Lỗi tải danh sách huyện"); }
   };
@@ -1650,7 +1716,7 @@ function bindAddressPicker(prefill){
       openAddrPicker(`Chọn Phường/Xã · ${subtitle}`, list, (item)=>{
         state.w = item;
         setLabel(wBtn, item.name, true);
-        syncFinal();
+        syncFinal(); fire();
       });
     }catch(e){ loadingBtn(wBtn, false); toast("Lỗi tải danh sách xã"); }
   };

@@ -985,7 +985,7 @@ async function renderOrders(filter=""){
   ${list.length? `<div class="tablewrap"><table class="tbl">
     <thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>SĐT</th><th>SP</th><th>Tổng</th><th>Trạng thái</th><th>Ngày</th><th></th></tr></thead>
     <tbody>${list.map(o=>`<tr>
-      <td><b>${esc(o.code)}</b></td>
+      <td><b>${esc(o.code)}</b>${o.ghn_order_code?` <span title="Đã đẩy GHN: ${esc(o.ghn_order_code)}" style="font-size:11px">🚚</span>`:""}</td>
       <td>${esc(o.customer_name||"")}</td>
       <td>${esc(o.phone||"")}</td>
       <td>${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
@@ -1047,7 +1047,116 @@ function orderModal(o){
       <div class="line"><span>Tạm tính</span><span>${money(o.subtotal||0)}</span></div>
       <div class="line"><span>Giao hàng</span><span>${o.shipping?money(o.shipping):"Miễn phí"}</span></div>
       <div class="total"><span>Tổng</span><span>${money(o.total||0)}</span></div>
-    </div>`);
+    </div>
+    <div id="ghnBox" style="margin-top:16px"></div>`);
+
+  renderGhnBox(o);
+}
+
+/* ---------------- GHN trong order modal ---------------- */
+function renderGhnBox(o){
+  const box = $("#ghnBox"); if(!box) return;
+  if(!window.GHN || !window.GHN.enabled){
+    box.innerHTML = `<div class="muted" style="font-size:12.5px;padding:10px;background:#fafafa;border-radius:8px">
+      💡 Cấu hình GHN trong Supabase để bật nút "Tạo đơn GHN" (xem SETUP.md §I).
+    </div>`;
+    return;
+  }
+  const hasGhn = !!o.ghn_order_code;
+  const statusName = ghnStatusName(o.ghn_status);
+  const trackingUrl = hasGhn
+    ? `https://tracking.ghn.dev/?order_code=${encodeURIComponent(o.ghn_order_code)}`
+    : "";
+
+  box.innerHTML = `
+  <div style="border:1px solid var(--line);border-radius:10px;padding:14px;background:#fafbff">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <b style="font-size:14px">🚚 Giao Hàng Nhanh</b>
+      ${hasGhn ? `<span class="status-pill" style="background:#eaf3ff;color:#1a56b8;padding:3px 10px;border-radius:99px;font-size:12px">${esc(statusName)}</span>` : ""}
+    </div>
+    ${hasGhn ? `
+      <div style="font-size:13px;line-height:1.7">
+        <div>Mã vận đơn: <b>${esc(o.ghn_order_code)}</b>
+          <a href="${trackingUrl}" target="_blank" rel="noopener" style="margin-left:8px;font-size:12px">↗ Tracking</a></div>
+        ${o.ghn_fee ? `<div>Phí GHN thực tế: <b>${money(o.ghn_fee)}</b></div>` : ""}
+        ${o.ghn_expected_at ? `<div>Dự kiến giao: <b>${new Date(o.ghn_expected_at).toLocaleDateString("vi-VN")}</b></div>` : ""}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="mini" id="ghnTrack">↻ Cập nhật trạng thái</button>
+        ${["delivered","cancel","returned"].includes(o.ghn_status) ? "" :
+          `<button class="mini danger" id="ghnCancel">Huỷ vận đơn</button>`}
+      </div>
+    ` : `
+      <p class="muted" style="font-size:13px;margin-bottom:10px">Chưa tạo vận đơn. Bấm để gửi đơn này sang GHN — họ sẽ tới lấy hàng.</p>
+      <button class="btn btn-dark" id="ghnCreate" style="padding:10px 18px">Tạo đơn GHN</button>
+    `}
+    <div id="ghnMsg" class="muted" style="font-size:12px;margin-top:10px"></div>
+  </div>`;
+
+  const msg = $("#ghnMsg");
+  const setMsg = (txt, color="")=>{ msg.textContent = txt; msg.style.color = color || ""; };
+
+  const btnCreate = $("#ghnCreate");
+  if(btnCreate) btnCreate.onclick = async ()=>{
+    btnCreate.disabled = true; btnCreate.textContent = "Đang tạo…"; setMsg("");
+    try{
+      const data = await GHN.createOrder(o.code);
+      toast(`Đã tạo vận đơn: ${data.order_code}`);
+      // Refresh đơn từ DB và re-render box
+      const fresh = await DB.getOrderByCode(o.code);
+      if(fresh){ Object.assign(o, fresh); renderGhnBox(o); }
+      // Đồng bộ danh sách
+      const row = _orders.find(x=>(x.id||x.code)===(o.id||o.code));
+      if(row) Object.assign(row, fresh||{});
+    }catch(e){
+      btnCreate.disabled = false; btnCreate.textContent = "Tạo đơn GHN";
+      setMsg("Lỗi: " + e.message, "var(--sale)");
+    }
+  };
+
+  const btnTrack = $("#ghnTrack");
+  if(btnTrack) btnTrack.onclick = async ()=>{
+    btnTrack.disabled = true; btnTrack.textContent = "Đang tải…"; setMsg("");
+    try{
+      const d = await GHN.track(o.code);
+      const fresh = await DB.getOrderByCode(o.code);
+      if(fresh){ Object.assign(o, fresh); renderGhnBox(o); }
+      setMsg(`Trạng thái: ${ghnStatusName(d.status)}`, "var(--muted)");
+    }catch(e){
+      btnTrack.disabled = false; btnTrack.textContent = "↻ Cập nhật trạng thái";
+      setMsg("Lỗi: " + e.message, "var(--sale)");
+    }
+  };
+
+  const btnCancel = $("#ghnCancel");
+  if(btnCancel) btnCancel.onclick = async ()=>{
+    const ok = await confirmDialog({
+      title:"Huỷ vận đơn GHN?",
+      body:`Vận đơn <b>${esc(o.ghn_order_code)}</b> sẽ bị huỷ. Không thể hoàn tác bên GHN.`,
+      confirmText:"Huỷ vận đơn", danger:true,
+    });
+    if(!ok) return;
+    btnCancel.disabled = true; setMsg("");
+    try{
+      await GHN.cancel(o.code);
+      toast("Đã huỷ vận đơn GHN");
+      const fresh = await DB.getOrderByCode(o.code);
+      if(fresh){ Object.assign(o, fresh); renderGhnBox(o); }
+    }catch(e){
+      btnCancel.disabled = false;
+      setMsg("Lỗi: " + e.message, "var(--sale)");
+    }
+  };
+}
+
+function ghnStatusName(s){
+  const map = {
+    ready_to_pick:"Chờ lấy hàng", picking:"Đang lấy hàng", picked:"Đã lấy hàng",
+    storing:"Đang ở kho", transporting:"Đang vận chuyển", sorting:"Đang phân loại",
+    delivering:"Đang giao", delivered:"Giao thành công", delivery_fail:"Giao thất bại",
+    cancel:"Đã huỷ", return:"Trả hàng", returned:"Đã trả hàng",
+  };
+  return map[s] || s || "—";
 }
 
 /* ---------------- SẢN PHẨM ---------------- */
