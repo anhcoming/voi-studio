@@ -302,12 +302,12 @@ function confirmDialog({title="Xác nhận", body="", confirmText="Xác nhận",
     const ov = document.createElement("div");
     ov.className = "modal-overlay";
     ov.id = "confirmDialog_"+Date.now();
-    ov.innerHTML = `<div class="modal" style="max-width:400px">
+    ov.innerHTML = `<div class="modal confirm-modal" style="max-width:400px">
       <h3 class="modal-title">${title}</h3>
       <div class="confirm-body" style="font-size:14px;line-height:1.55;color:var(--ink-soft);margin-bottom:6px">${body}</div>
-      <div class="modal-foot" style="display:flex;gap:10px">
-        <button type="button" class="btn btn-outline" data-act="cancel" style="flex:1">${cancelText}</button>
-        <button type="button" class="btn ${danger?"btn-danger":"btn-dark"}" data-act="ok" style="flex:1" autofocus>${confirmText}</button>
+      <div class="confirm-actions">
+        <button type="button" class="btn btn-outline" data-act="cancel">${cancelText}</button>
+        <button type="button" class="btn ${danger?"btn-danger":"btn-dark"}" data-act="ok" autofocus>${confirmText}</button>
       </div>
     </div>`;
     document.body.appendChild(ov);

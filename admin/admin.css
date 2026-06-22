@@ -75,7 +75,6 @@ table.tbl tr:hover td{background:#fafafa}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;border:1.5px solid var(--line);border-radius:30px;padding:13px;font-weight:600;font-size:14.5px}
 .gbtn:hover{border-color:var(--ink)}
 .gbtn svg{width:20px;height:20px}
-.or-sep{text-align:center;color:var(--muted);font-size:12.5px;margin:14px 0}
 .login-note{margin-top:18px;font-size:12.5px;color:var(--muted);background:var(--bg-soft);border-radius:10px;padding:12px}
 
 /* image upload */
@@ -199,15 +198,74 @@ table.tbl tr:hover td{background:#fafafa}
 .mini.ghost:hover{background:#fff5f5;border-color:#f0c5c5}
 
 /* ============ BULK ACTION BAR ============ */
-.bulk-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:#101010;color:#fff;border-radius:12px;padding:12px 18px;margin-bottom:14px;animation:bulk-slide .25s ease-out}
-@keyframes bulk-slide{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
-.bulk-bar b{font-size:15px}
-.bulk-bar .muted{color:#a0a0a0;font-size:12.5px;margin-left:4px}
-.bulk-bar .bb-actions{display:flex;gap:8px;align-items:center}
-.bulk-bar .statusSelect{background-color:#222;color:#fff;border-color:#333;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E")}
-.bulk-bar .mini{background:transparent;color:#fff;border-color:#444}
-.bulk-bar .mini:hover{border-color:#fff}
-.bulk-bar .btn-sm{padding:8px 16px;font-size:13px}
+.bulk-bar{
+  display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  background:linear-gradient(135deg,#101010 0%,#1c1c1c 100%);color:#fff;
+  border-radius:14px;padding:12px 14px 12px 20px;margin-bottom:14px;
+  box-shadow:0 6px 20px rgba(0,0,0,.12);
+  animation:bulk-slide .26s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes bulk-slide{from{opacity:0;transform:translateY(-8px) scale(.985)}to{opacity:1;transform:none}}
+
+/* Khu count (trái) */
+.bb-count{display:flex;align-items:center;gap:11px;min-width:0}
+.bb-num{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:34px;height:34px;padding:0 9px;border-radius:10px;
+  background:var(--sale);color:#fff;font-family:var(--font-display);
+  font-weight:900;font-size:17px;letter-spacing:0;
+  box-shadow:0 2px 8px rgba(224,36,36,.32);
+}
+.bb-label{display:flex;flex-direction:column;line-height:1.25;font-size:13.5px;font-weight:600}
+.bb-sub{font-size:11.5px;color:#a8a8a8;font-weight:500;margin-top:1px;letter-spacing:.01em}
+.bb-sub-ok{color:#4ec986}
+
+/* Khu actions (phải) */
+.bulk-bar .bb-actions{display:flex;gap:10px;align-items:center}
+
+/* Segmented print group: [A5 ▾ | 🖨 In tem GHN  · 1 ] */
+.bb-print-group{
+  display:inline-flex;align-items:stretch;background:#fff;border-radius:30px;overflow:hidden;
+  box-shadow:0 4px 14px rgba(255,255,255,.06);
+  transition:opacity .15s,filter .15s;
+}
+.bb-print-group[data-disabled]{opacity:.4;filter:saturate(.4)}
+.bb-size{
+  appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  background:#fff;color:#101010;border:0;
+  padding:0 30px 0 14px;font-family:inherit;font-size:12.5px;font-weight:700;letter-spacing:.04em;
+  cursor:pointer;border-right:1px solid #e0e0e0;height:38px;outline:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%23101010' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;
+}
+.bb-size:hover{background-color:#f5f5f3}
+.bb-size:focus-visible{box-shadow:inset 0 0 0 2px #101010}
+.bb-print-btn{
+  display:inline-flex;align-items:center;gap:8px;
+  background:#fff;color:#101010;border:0;padding:0 18px;height:38px;
+  font-family:inherit;font-size:13px;font-weight:700;letter-spacing:.02em;cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.bb-print-btn:hover:not(:disabled){background:var(--sale);color:#fff}
+.bb-print-btn:disabled{cursor:not-allowed}
+.bb-print-ic{font-size:15px;line-height:1}
+.bb-print-count{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:22px;height:22px;padding:0 7px;border-radius:11px;
+  background:#101010;color:#fff;font-size:11.5px;font-weight:800;letter-spacing:0;
+  margin-left:2px;transition:background .15s;
+}
+.bb-print-btn:hover:not(:disabled) .bb-print-count{background:#fff;color:var(--sale)}
+
+/* Close (X) tròn */
+.bb-close{
+  width:38px;height:38px;border-radius:50%;background:transparent;
+  border:1.5px solid #333;color:#cfcfcf;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background .15s,color .15s,border-color .15s,transform .15s;
+}
+.bb-close:hover{background:#fff;color:#101010;border-color:#fff;transform:rotate(90deg)}
+.bb-close svg{display:block}
 
 /* ============ TABLE: checkbox + badges + row state ============ */
 .tbl-orders .th-tick{width:38px;text-align:center;padding-left:14px;padding-right:6px}
@@ -272,80 +330,29 @@ table.tbl tr:hover td{background:#fafafa}
   /* Bulk bar — fixed bottom trên mobile */
   .bulk-bar{
     position:fixed;left:10px;right:10px;bottom:10px;
-    border-radius:14px;padding:12px 14px;z-index:30;
-    box-shadow:0 8px 30px rgba(0,0,0,.25);
-    flex-direction:column;align-items:stretch;
-    margin-bottom:0;
+    z-index:30;box-shadow:0 12px 36px rgba(0,0,0,.3);
+    flex-direction:column;align-items:stretch;gap:12px;
+    margin-bottom:0;padding:12px 14px;
   }
-  .bulk-bar > div:first-child{font-size:13px;text-align:center}
-  .bulk-bar b{font-size:14px}
-  .bulk-bar .bb-actions{justify-content:space-between;flex-wrap:wrap;gap:6px}
-  .bulk-bar .bb-actions > *{flex:1;min-width:0}
-  .bulk-bar .btn-sm{padding:9px 12px;font-size:12.5px;text-align:center}
+  .bb-count{justify-content:center}
+  .bb-label{text-align:left}
+  .bulk-bar .bb-actions{justify-content:space-between;gap:8px}
+  .bb-print-group{flex:1;border-radius:24px}
+  .bb-print-btn{flex:1;justify-content:center;padding:0 12px;font-size:12.5px}
+  .bb-print-text{display:inline}
+  .bb-size{padding:0 26px 0 12px;height:34px;font-size:12px}
+  .bb-print-btn{height:34px}
+  .bb-close{width:34px;height:34px;flex-shrink:0}
   /* Padding cuối page để bulk bar không che row */
-  body:has(.bulk-bar){padding-bottom:120px}
+  body:has(.bulk-bar){padding-bottom:140px}
 
   /* Form rows */
   .frow{grid-template-columns:1fr}
 }
 
-/* ============ ORDERS TABLE → CARD LAYOUT (≤820px) ============ */
-@media(max-width:820px){
-  /* Bao .tablewrap không cần border, mỗi card tự có border */
-  .tbl-orders{display:block;background:transparent;min-width:0}
-  .tablewrap:has(.tbl-orders){background:transparent;border:0;overflow:visible}
-  .tbl-orders thead{display:none}
-  .tbl-orders tbody{display:flex;flex-direction:column;gap:10px}
-  .tbl-orders tr{
-    display:grid;grid-template-columns:auto 1fr;gap:6px 12px;
-    background:#fff;border:1px solid var(--line);border-radius:12px;
-    padding:14px;align-items:center;
-  }
-  .tbl-orders tr.row-slow{background:#fffbf2;border-color:#f0d98a}
-  .tbl-orders tr.row-late{background:#fff5f5;border-color:#f0c5c5}
-  .tbl-orders tr:hover td{background:transparent}
-  .tbl-orders td{
-    display:block;padding:0;border:0;font-size:13.5px;line-height:1.4;
-  }
-  /* Label trước mỗi cell — hiện ở cards layout */
-  .tbl-orders td::before{
-    content:attr(data-label);
-    display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
-    color:var(--muted);font-weight:600;margin-bottom:2px;
-  }
-  /* Checkbox: vị trí góc trái, span 1 cột */
-  .tbl-orders td.th-tick{
-    grid-row:1;grid-column:1;padding:0;width:auto;
-    display:flex;align-items:center;justify-content:center;
-  }
-  .tbl-orders td.th-tick::before{display:none}
-  .tbl-orders td.th-tick input{width:20px;height:20px}
-  /* Mã đơn: bên phải checkbox, span sang full nếu cần */
-  .tbl-orders td[data-label="Mã đơn"]{grid-row:1;grid-column:2;font-size:15px}
-  .tbl-orders td[data-label="Mã đơn"]::before{display:none}
-  .tbl-orders td[data-label="Mã đơn"] b{font-size:15px}
-  /* Hàng sau xếp 2 cột */
-  .tbl-orders td[data-label="Khách hàng"]{grid-column:1/-1;margin-top:6px;padding-top:10px;border-top:1px dashed var(--line)}
-  .tbl-orders td[data-label="SĐT"]{grid-column:1/-1}
-  .tbl-orders td[data-label="SP"]{grid-column:1;text-align:left}
-  .tbl-orders td[data-label="Tổng"]{grid-column:2;text-align:right}
-  .tbl-orders td.cell-num{text-align:left}
-  .tbl-orders td[data-label="Tổng"].cell-num{text-align:right}
-  .tbl-orders td[data-label="Trạng thái"]{grid-column:1/-1}
-  .tbl-orders td[data-label="Trạng thái"] .statusSelect{width:100%}
-  .tbl-orders td[data-label="Ngày đặt"]{grid-column:1/-1;display:flex;gap:8px;align-items:baseline}
-  .tbl-orders td[data-label="Ngày đặt"]::before{margin-bottom:0;align-self:center}
-  .tbl-orders td[data-label="Ngày đặt"] > div{display:inline}
-  .tbl-orders td.cell-actions{
-    grid-column:1/-1;margin-top:6px;padding-top:10px;
-    border-top:1px dashed var(--line);
-  }
-  .tbl-orders td.cell-actions::before{display:none}
-  .tbl-orders .row-actions{width:100%;display:flex;gap:8px}
-  .tbl-orders .row-actions .mini{flex:1;justify-content:center;padding:9px 12px;font-size:13px}
-  .tbl-orders .row-actions .mini.icon-only{flex:0 0 auto;min-width:44px}
-  .result-count{text-align:center;padding-bottom:14px}
-}
+/* Bảng đơn — scroll ngang khi chật, giữ nguyên layout */
+.tablewrap{-webkit-overflow-scrolling:touch}
+.tbl-orders{min-width:880px}   /* đảm bảo đủ rộng cho 9 cột */
 
 /* Mobile dọc ≤ 480px */
 @media(max-width:480px){

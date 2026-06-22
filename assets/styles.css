@@ -636,6 +636,10 @@ input,textarea,select{font-family:inherit}
 /* Footer dính dưới */
 .modal-foot{position:sticky;bottom:-30px;margin:18px -30px -30px;padding:14px 30px 22px;background:#fff;border-top:1px solid var(--line);z-index:3;box-shadow:0 -3px 12px rgba(0,0,0,.04)}
 .modal-foot > *:not(:last-child){margin-bottom:8px}
+/* Confirm dialog footer — 2 nút side-by-side cân nhau, KHÔNG dùng .modal-foot
+   (vì .modal-foot có sticky + margin-bottom cho first child gây lệch). */
+.confirm-modal .confirm-actions{display:flex;gap:10px;margin-top:18px}
+.confirm-modal .confirm-actions .btn{flex:1;min-width:0;padding-left:16px;padding-right:16px}
 @media(max-width:560px){
   .modal-title{margin:-22px -22px 14px;padding:16px 54px 12px 22px;top:-22px;font-size:16px}
   .modal-foot{margin:14px -22px -22px;padding:12px 22px 18px;bottom:-22px}
@@ -863,6 +867,13 @@ input,textarea,select{font-family:inherit}
 /* Đăng nhập khách / user menu */
 .user-menu{position:relative}
 .user-menu .icon-btn{width:auto;height:auto}
+/* Admin → avatar = link thẳng vào /admin/. Hiển thị "ADMIN" mini-tag cạnh avatar. */
+.user-admin-link{display:inline-flex;align-items:center;gap:7px;padding:4px 10px 4px 4px;border:1.5px solid transparent;border-radius:30px;transition:background .15s,border-color .15s;text-decoration:none;width:auto;height:auto}
+.user-admin-link:hover{background:#fff6e0;border-color:#f0d98a}
+.user-admin-link .ua-admin-tag{font-family:var(--font-display);font-size:10px;font-weight:800;letter-spacing:.08em;color:#7a5b00;background:#fff6e0;padding:3px 8px;border-radius:10px;border:1px solid #f0d98a}
+@media(max-width:560px){
+  .user-admin-link .ua-admin-tag{display:none}   /* mobile chật → ẩn tag, vẫn còn chấm vàng */
+}
 .ua-circle{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--ink);color:#fff;font-size:13px;font-weight:700;font-family:var(--font-display);letter-spacing:0;border:1.5px solid var(--ink);position:relative}
 .user-menu.open .ua-circle{background:#fff;color:var(--ink)}
 /* Admin badge — chấm vàng nhỏ góc phải-trên avatar */

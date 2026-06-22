@@ -50,35 +50,19 @@ async function boot(){
 function renderLogin(user){
   const denied = user && !DB.isAdmin(user);
   const gsvg = `<svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.8 6c1.9-5.6 7.1-9.8 13.7-9.8z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.4 5.7c4.3-4 6.8-9.9 6.8-17.4z"/><path fill="#FBBC05" d="M10.3 28.7c-.5-1.4-.8-2.9-.8-4.7s.3-3.3.8-4.7l-7.8-6C.9 16.5 0 20.1 0 24s.9 7.5 2.5 10.7l7.8-6z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2 1.4-4.7 2.3-8.5 2.3-6.6 0-12.2-4.5-14.2-10.5l-7.8 6C6.4 42.6 14.6 48 24 48z"/></svg>`;
-  const adminEmail = (window.CONFIG.ADMIN_EMAILS||[""])[0]||"";
   document.body.innerHTML = `<div class="login-screen"><div class="login-card">
     <div class="logo">${S.BRAND.name}<span class="dot">.</span></div>
     <p>Trang quản trị cửa hàng</p>
     ${denied
       ? `<div class="notice err">Tài khoản <b>${esc(user.email)}</b> không có quyền admin.</div>
          <button class="gbtn" id="logoutBtn">Đăng xuất & thử tài khoản khác</button>`
-      : `<form id="pwForm" style="text-align:left" novalidate>
-          <label class="fld"><span>Email admin</span><input name="email" type="email" value="${esc(adminEmail)}" required></label>
-          <label class="fld"><span>Mật khẩu</span><input name="password" type="password" placeholder="••••••••" required></label>
-          <button class="btn btn-dark btn-block" type="submit" id="pwBtn">Đăng nhập</button>
-        </form>
-        ${DB.cloud?`<div class="or-sep">hoặc</div><button class="gbtn" id="loginBtn">${gsvg} Đăng nhập bằng Google</button>`:``}`}
+      : DB.cloud
+        ? `<button class="gbtn" id="loginBtn">${gsvg} Đăng nhập bằng Google</button>`
+        : `<button class="gbtn" id="loginBtn">${gsvg} Đăng nhập demo</button>`}
     <div class="login-note">${DB.cloud
-      ? "Tạo tài khoản admin trong Supabase → Authentication → Users (nhớ bật Auto Confirm). Chỉ email trong danh sách admin mới vào được."
-      : "Đang ở <b>chế độ demo</b>. Nhập email admin ("+esc(adminEmail)+") với mật khẩu bất kỳ để vào thử."}</div>
+      ? "Chỉ email trong danh sách admin mới vào được. Liên hệ chủ shop để được cấp quyền."
+      : "Đang ở <b>chế độ demo</b> — bấm để giả lập tài khoản admin."}</div>
   </div></div>`;
-  const pf=$("#pwForm");
-  if(pf) pf.onsubmit=async(e)=>{
-    e.preventDefault();
-    const ok = validateFields([
-      {el:pf.email,    msg:"Email không hợp lệ", test:v=> /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)},
-      {el:pf.password, msg:"Nhập mật khẩu"},
-    ]);
-    if(!ok) return;
-    const b=$("#pwBtn"); b.disabled=true; b.textContent="Đang đăng nhập…";
-    try{ await DB.signInPassword(pf.email.value, pf.password.value); boot(); }
-    catch(err){ b.disabled=false; b.textContent="Đăng nhập"; toast("Đăng nhập thất bại: "+(err.message||err)); }
-  };
   const lb=$("#loginBtn"); if(lb) lb.onclick=async()=>{
     if(lb.disabled) return;
     lb.disabled=true; const prevText=lb.textContent; lb.textContent="Đang mở Google…";
@@ -108,7 +92,16 @@ function renderShell(){
     <button data-tab="home">Trang chủ</button>
   </div></div>
   <div class="admin-wrap" id="adminContent"></div>`;
-  $("#logoutBtn").onclick=async()=>{ await DB.signOut(); if(!DB.cloud) boot(); };
+  $("#logoutBtn").onclick=async()=>{
+    const ok = await confirmDialog({
+      title:"Đăng xuất?",
+      body:`Bạn sẽ thoát khỏi tài khoản <b>${esc(A.user.email||"")}</b> và quay về màn hình đăng nhập.`,
+      confirmText:"Đăng xuất",
+    });
+    if(!ok) return;
+    await DB.signOut();
+    if(!DB.cloud) boot();
+  };
   $$(".admin-tabs button").forEach(b=> b.onclick=()=>switchTab(b.dataset.tab));
 }
 function switchTab(tab){
@@ -1133,16 +1126,32 @@ function _renderOrdersInner(){
 
   ${st.selected.size ? `
   <div class="bulk-bar">
-    <div><b>${st.selected.size}</b> đơn đã chọn ${selectedHasGhn.length<st.selected.size ? `<span class="muted">(${selectedHasGhn.length} có vận đơn GHN)</span>` : ""}</div>
+    <div class="bb-count">
+      <span class="bb-num">${st.selected.size}</span>
+      <span class="bb-label">
+        đơn đã chọn
+        ${selectedHasGhn.length<st.selected.size
+          ? `<span class="bb-sub">${selectedHasGhn.length}/${st.selected.size} có vận đơn GHN</span>`
+          : `<span class="bb-sub bb-sub-ok">Tất cả đã có vận đơn GHN</span>`}
+      </span>
+    </div>
     <div class="bb-actions">
-      <select id="bulkPrintSize" class="statusSelect" title="Khổ giấy in">
-        <option value="A5" selected>A5</option>
-        <option value="A6">A6</option>
-        <option value="80x80">80×80mm</option>
-        <option value="52x70">52×70mm</option>
-      </select>
-      <button class="btn btn-dark btn-sm" id="bulkPrint" ${selectedHasGhn.length?"":"disabled"}>🖨 In tem GHN (${selectedHasGhn.length})</button>
-      <button class="mini" id="bulkClear">Bỏ chọn</button>
+      <div class="bb-print-group" ${selectedHasGhn.length?"":"data-disabled"}>
+        <select id="bulkPrintSize" class="bb-size" title="Khổ giấy in">
+          <option value="A5" selected>A5</option>
+          <option value="A6">A6</option>
+          <option value="80x80">80×80mm</option>
+          <option value="52x70">52×70mm</option>
+        </select>
+        <button class="bb-print-btn" id="bulkPrint" ${selectedHasGhn.length?"":"disabled"}>
+          <span class="bb-print-ic">🖨</span>
+          <span class="bb-print-text">In tem GHN</span>
+          <span class="bb-print-count">${selectedHasGhn.length}</span>
+        </button>
+      </div>
+      <button class="bb-close" id="bulkClear" title="Bỏ chọn tất cả" aria-label="Bỏ chọn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
     </div>
   </div>
   ` : ""}
@@ -1172,20 +1181,20 @@ function _renderOrdersInner(){
         ? `<button class="mini icon-only oprint" data-code="${esc(o.code)}" title="In tem GHN (A5)">🖨</button>`
         : `<button class="mini icon-only" disabled title="Chưa có vận đơn GHN — tạo trong chi tiết">🖨</button>`;
       return `<tr class="${rowClass}">
-        <td class="th-tick" data-label="Chọn"><input type="checkbox" class="tick" data-code="${esc(o.code)}" ${checked}></td>
-        <td data-label="Mã đơn"><b>${esc(o.code)}</b><div class="row-badges">${badges.join("")}</div></td>
-        <td data-label="Khách hàng">${esc(o.customer_name||"")}</td>
-        <td data-label="SĐT">${esc(o.phone||"")}</td>
-        <td data-label="SP" class="cell-num">${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
-        <td data-label="Tổng" class="cell-num"><b>${money(o.total||0)}</b></td>
-        <td data-label="Trạng thái"><select class="statusSelect ostatus" data-id="${esc(o.id||o.code)}" style="border-color:${STATUS_COLOR[o.status]||'#ccc'}">
+        <td class="th-tick"><input type="checkbox" class="tick" data-code="${esc(o.code)}" ${checked}></td>
+        <td><b>${esc(o.code)}</b><div class="row-badges">${badges.join("")}</div></td>
+        <td>${esc(o.customer_name||"")}</td>
+        <td>${esc(o.phone||"")}</td>
+        <td class="cell-num">${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
+        <td class="cell-num"><b>${money(o.total||0)}</b></td>
+        <td><select class="statusSelect ostatus" data-id="${esc(o.id||o.code)}" style="border-color:${STATUS_COLOR[o.status]||'#ccc'}">
           ${Object.keys(STATUS).map(k=>`<option value="${k}" ${o.status===k?"selected":""}>${STATUS[k]}</option>`).join("")}
         </select></td>
-        <td data-label="Ngày đặt">
+        <td>
           <div>${new Date(o.created_at).toLocaleDateString("vi-VN")}</div>
           <div class="muted" style="font-size:11px">${_timeAgo(o.created_at)}</div>
         </td>
-        <td data-label="Hành động" class="cell-actions">
+        <td class="cell-actions">
           <div class="row-actions">
             <button class="mini odetail" data-code="${esc(o.code)}">Xem</button>
             ${printBtn}

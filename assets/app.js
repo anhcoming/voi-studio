@@ -261,18 +261,27 @@ function renderAuthSlot(){
     return;
   }
   const isAdmin = DB.isAdmin ? DB.isAdmin(Auth.user) : false;
+  // Admin: avatar = link thẳng vào /admin/, không mở dropdown
+  // Khách thường: avatar = button mở dropdown (đơn của tôi, đăng xuất)
+  if(isAdmin){
+    slot.innerHTML = `
+      <a href="admin/" class="icon-btn user-admin-link" title="${escapeXML(Auth.displayName())} · Vào trang quản trị" aria-label="Vào trang quản trị">
+        <span class="ua-circle is-admin">${escapeXML(Auth.initial())}</span>
+        <span class="ua-admin-tag">ADMIN</span>
+      </a>`;
+    return;
+  }
   slot.innerHTML = `
     <div class="user-menu" id="userMenu">
       <button class="icon-btn" id="userBtnHeader" aria-label="Tài khoản" title="${escapeXML(Auth.displayName())}">
-        <span class="ua-circle${isAdmin?' is-admin':''}">${escapeXML(Auth.initial())}</span>
+        <span class="ua-circle">${escapeXML(Auth.initial())}</span>
       </button>
       <div class="user-dd" id="userDD" hidden>
         <div class="ud-head">
-          <div class="ud-name">${escapeXML(Auth.displayName())}${isAdmin?` <span class="ud-badge">ADMIN</span>`:""}</div>
+          <div class="ud-name">${escapeXML(Auth.displayName())}</div>
           <div class="ud-email">${escapeXML(Auth.email())}</div>
         </div>
         <a href="order.html" class="ud-item">Đơn của tôi</a>
-        ${isAdmin?`<a href="admin/" class="ud-item ud-admin">⚙ Trang quản trị</a>`:""}
         <button class="ud-item danger" id="signOutBtnHeader" type="button">Đăng xuất</button>
       </div>
     </div>`;
@@ -285,6 +294,12 @@ function renderAuthSlot(){
   };
   $("#signOutBtnHeader").onclick = async ()=>{
     dd.hidden = true; menu.classList.remove("open");
+    const ok = await confirmDialog({
+      title:"Đăng xuất?",
+      body:`Bạn sẽ thoát khỏi tài khoản <b>${escapeXML(Auth.email()||"")}</b>. Đơn hàng đã đặt vẫn lưu — đăng nhập lại bất cứ lúc nào để xem.`,
+      confirmText:"Đăng xuất",
+    });
+    if(!ok) return;
     await Auth.signOut();
   };
 }
