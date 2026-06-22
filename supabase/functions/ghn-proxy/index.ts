@@ -66,9 +66,11 @@ async function ghn(path: string, body: unknown, withShopId = true): Promise<any>
   let data: GhnResp;
   try { data = JSON.parse(text) as GhnResp; } catch { data = { raw: text }; }
   if (!r.ok || data.code !== 200) {
-    // GHN trả 200 HTTP nhưng code != 200 khi sai input
-    throw new Error(data.message || data.code_message_value || `GHN HTTP ${r.status}`);
+    throw new Error(
+      `GHN[${GHN_ENV}] ${path} → HTTP ${r.status}, code=${data.code}, msg=${data.message || data.code_message_value || "(no msg)"}, body=${text.slice(0, 300)}`
+    );
   }
+  // KHÔNG throw khi data=null — để caller (resolveAddress) tự xử với diag tốt hơn.
   return data.data;
 }
 
@@ -102,30 +104,48 @@ async function resolveAddress(
 
   // 2) Resolve từ GHN
   const provinces = await ghn("/master-data/province", {}, false);
+  if (!Array.isArray(provinces)) {
+    throw new Error(`GHN province list không phải array: ${JSON.stringify(provinces).slice(0,200)}`);
+  }
   const provMatch = provinces.find((x: any) =>
     norm(x.ProvinceName) === p ||
     (x.NameExtension || []).some((n: string) => norm(n) === p)
   );
-  if (!provMatch) throw new Error(`Không map được Tỉnh: ${province_name}`);
+  if (!provMatch) {
+    const avail = provinces.slice(0, 5).map((x:any)=>x.ProvinceName).join(", ");
+    throw new Error(`Không map được Tỉnh: "${province_name}" (norm="${p}"). Dev env có ${provinces.length} tỉnh, vd: ${avail}...`);
+  }
   const ghn_province_id = provMatch.ProvinceID;
 
   let ghn_district_id: number | null = null, ghn_ward_code: string | null = null;
   if (d) {
     const districts = await ghn("/master-data/district", { province_id: ghn_province_id }, false);
+    if (!Array.isArray(districts)) {
+      throw new Error(`GHN không trả về district cho province "${provMatch.ProvinceName}" (id=${ghn_province_id}). Dev env có thể chưa có data cho tỉnh này — thử tỉnh khác (xem province list ở action master).`);
+    }
     const dm = districts.find((x: any) =>
       norm(x.DistrictName) === d ||
       (x.NameExtension || []).some((n: string) => norm(n) === d)
     );
-    if (!dm) throw new Error(`Không map được Quận/Huyện: ${district_name}`);
+    if (!dm) {
+      const avail = districts.slice(0, 5).map((x:any)=>x.DistrictName).join(", ");
+      throw new Error(`Không map được Quận/Huyện: "${district_name}" (norm="${d}") trong tỉnh "${provMatch.ProvinceName}". Có ${districts.length} quận, vd: ${avail}...`);
+    }
     ghn_district_id = dm.DistrictID;
 
     if (w) {
       const wards = await ghn("/master-data/ward", { district_id: ghn_district_id }, false);
+      if (!Array.isArray(wards)) {
+        throw new Error(`GHN không trả về ward cho district "${dm.DistrictName}" (id=${ghn_district_id}).`);
+      }
       const wm = wards.find((x: any) =>
         norm(x.WardName) === w ||
         (x.NameExtension || []).some((n: string) => norm(n) === w)
       );
-      if (!wm) throw new Error(`Không map được Phường/Xã: ${ward_name}`);
+      if (!wm) {
+        const avail = wards.slice(0, 5).map((x:any)=>x.WardName).join(", ");
+        throw new Error(`Không map được Phường/Xã: "${ward_name}" (norm="${w}") trong quận "${dm.DistrictName}". Có ${wards.length} phường, vd: ${avail}...`);
+      }
       ghn_ward_code = wm.WardCode;
     }
   }
@@ -196,6 +216,10 @@ async function handleCreate(supa: SupabaseClient, p: any) {
     from_ward_name:   cfg.from_ward_name  || "",
     from_district_name: cfg.from_district_name || "",
     from_province_name: cfg.from_province_name || "",
+    // ID kho lấy hàng — BẮT BUỘC để GHN match đúng địa chỉ đã đăng ký của shop.
+    // Thiếu 2 trường này, GHN cố lookup theo tên → có dấu TV → fail "Lỗi lấy thông tin shop".
+    from_district_id: cfg.from_district_id,
+    from_ward_code:   cfg.from_ward_code,
     to_name:          o.customer_name,
     to_phone:         o.phone,
     to_address:       o.address,
@@ -327,22 +351,49 @@ Deno.serve(async (req) => {
     // Service-role client để bỏ qua RLS (đã xác thực qua action)
     const supa = createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: false } });
 
-    // Một số action chỉ admin mới được gọi — verify bằng JWT của caller.
-    // Verify trực tiếp với JWT (không rely vào session storage của SDK) +
-    // check email trong bảng admin_emails qua service-role (không cần auth.jwt()
-    // bên SQL — tránh phụ thuộc cách Supabase inject ANON_KEY ở key-system mới).
+    // Một số action chỉ admin mới được gọi — verify JWT + check admin_emails table.
+    // [DIAG-v3] Có log chi tiết trong response để debug 403.
     const adminActions = new Set(["create", "cancel"]);
     if (adminActions.has(action)) {
       const authHeader = req.headers.get("authorization") || "";
       const jwt = authHeader.replace(/^Bearer\s+/i, "");
-      if (!jwt) return json({ error: "Cần đăng nhập admin" }, 401);
+      if (!jwt) return json({ error: "[v3] Cần đăng nhập admin (no JWT)" }, 401);
+
+      // Bước 1: decode JWT trực tiếp (không qua Supabase Auth) để chắc chắn lấy được email
+      let emailFromJwt = "";
+      try {
+        const payload = JSON.parse(atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+        emailFromJwt = (payload.email || "").toLowerCase();
+      } catch (e) {
+        return json({ error: "[v3] JWT không decode được", detail: (e as Error).message }, 401);
+      }
+
+      // Bước 2: verify JWT qua Supabase (xác nhận chữ ký + chưa hết hạn)
       const u = await supa.auth.getUser(jwt);
-      const email = (u.data?.user?.email || "").toLowerCase();
-      if (!email) return json({ error: "Token không hợp lệ hoặc đã hết hạn" }, 401);
-      const inTable = await supa.from("admin_emails").select("email").eq("email", email).maybeSingle();
-      const bootstrap = !inTable.data && email === "anhcoming@gmail.com";
-      if (!inTable.data && !bootstrap) {
-        return json({ error: `Email ${email} không có quyền admin (chưa trong bảng admin_emails)` }, 403);
+      const emailVerified = (u.data?.user?.email || "").toLowerCase();
+
+      // Bước 3: check admin_emails — dùng email từ JWT decode (chắc chắn có) làm fallback
+      const email = emailVerified || emailFromJwt;
+      const inTable = await supa.from("admin_emails").select("email").ilike("email", email).maybeSingle();
+      const allRows = await supa.from("admin_emails").select("email");
+
+      const isAdmin = !!inTable.data;
+      const bootstrap = !allRows.data?.length && email === "anhcoming@gmail.com";
+
+      if (!isAdmin && !bootstrap) {
+        return json({
+          error: "[v3] Email không có quyền admin",
+          diag: {
+            email_from_jwt: emailFromJwt,
+            email_verified: emailVerified,
+            jwt_verify_error: u.error?.message || null,
+            admin_emails_table_all: allRows.data,
+            admin_emails_table_error: allRows.error?.message || null,
+            inTable_match: inTable.data,
+            inTable_error: inTable.error?.message || null,
+            isAdmin, bootstrap,
+          },
+        }, 403);
       }
     }
 
