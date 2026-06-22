@@ -446,6 +446,14 @@
       }
       return read(LS.orders, []).find(o=>o.code===code)||null;
     },
+    /* Timeline GHN của 1 đơn (public, không cần login — dùng RPC security definer). */
+    async getTracking(code){
+      code = (code||"").trim().toUpperCase();
+      if(!this.cloud) return [];
+      const {data,error}=await supa.rpc("get_tracking_by_code",{p_code:code});
+      if(error){ console.warn("getTracking", error.message); return []; }
+      return data||[];
+    },
     async listOrders({status=""}={}){
       if(this.cloud){
         let q=supa.from("orders").select("*").order("created_at",{ascending:false});

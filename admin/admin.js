@@ -958,57 +958,323 @@ function openBlockEditor(idx){
 
 /* ---------------- ĐƠN HÀNG ---------------- */
 let _orders=[];
-async function renderOrders(filter=""){
+const _orderState = {
+  // Filter state — persist trong session để chuyển tab quay lại không mất
+  q: "",                  // search text
+  status: "",             // "" = tất cả, hoặc 1 trong STATUS keys
+  smart: "",              // "" | "slowConfirm" | "needShip" | "late"
+  dateRange: "all",       // "today" | "7d" | "30d" | "all"
+  sort: "newest",         // "newest" | "oldest" | "totalDesc" | "lateFirst"
+  selected: new Set(),    // Set<string> các order code đã tick
+};
+
+// Quá hạn xác nhận sau bao lâu (giờ)
+const SLOW_CONFIRM_HOURS = 24;
+
+function _orderMatches(o, st){
+  // search: code/phone/name
+  if(st.q){
+    const q = st.q.toLowerCase();
+    const hay = `${o.code||""} ${o.customer_name||""} ${o.phone||""}`.toLowerCase();
+    if(!hay.includes(q)) return false;
+  }
+  // status pill (single-select)
+  if(st.status && o.status !== st.status) return false;
+  // smart filter
+  if(st.smart === "slowConfirm"){
+    if(o.status !== "pending") return false;
+    if((Date.now() - new Date(o.created_at)) < SLOW_CONFIRM_HOURS*3600*1000) return false;
+  }
+  if(st.smart === "needShip"){
+    if(o.status !== "confirmed") return false;
+    if(o.ghn_order_code) return false;
+  }
+  if(st.smart === "late"){
+    if(!o.ghn_expected_at) return false;
+    if(new Date(o.ghn_expected_at) >= Date.now()) return false;
+    if(["delivered","cancel","returned"].includes(o.ghn_status)) return false;
+  }
+  // date range
+  if(st.dateRange !== "all"){
+    const days = st.dateRange === "today" ? 0 : st.dateRange === "7d" ? 7 : st.dateRange === "30d" ? 30 : null;
+    if(days !== null){
+      const cutoff = days === 0
+        ? new Date(new Date().toDateString()).getTime()
+        : Date.now() - days*86400*1000;
+      if(new Date(o.created_at).getTime() < cutoff) return false;
+    }
+  }
+  return true;
+}
+
+function _sortOrders(arr, sort){
+  const a = arr.slice();
+  if(sort === "oldest")     a.sort((x,y)=> new Date(x.created_at) - new Date(y.created_at));
+  else if(sort === "totalDesc") a.sort((x,y)=> (y.total||0) - (x.total||0));
+  else if(sort === "lateFirst") a.sort((x,y)=>{
+    const xd = x.ghn_expected_at ? new Date(x.ghn_expected_at) : new Date(8640000000000000);
+    const yd = y.ghn_expected_at ? new Date(y.ghn_expected_at) : new Date(8640000000000000);
+    return xd - yd;
+  });
+  else a.sort((x,y)=> new Date(y.created_at) - new Date(x.created_at));   // newest mặc định
+  return a;
+}
+
+function _timeAgo(iso){
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms/60000);
+  if(m<1) return "vừa xong";
+  if(m<60) return `${m} phút trước`;
+  const h = Math.floor(m/60);
+  if(h<24) return `${h} giờ trước`;
+  const d = Math.floor(h/24);
+  if(d<7) return `${d} ngày trước`;
+  return new Date(iso).toLocaleDateString("vi-VN");
+}
+
+async function renderOrders(){
   const c=$("#adminContent");
   c.innerHTML=`<div class="empty-state">Đang tải đơn hàng…</div>`;
   _orders = await DB.listOrders({});
-  const list = filter? _orders.filter(o=>o.status===filter) : _orders;
-  const revenue = _orders.filter(o=>o.status==="completed").reduce((s,o)=>s+(o.total||0),0);
-  const pending = _orders.filter(o=>o.status==="pending").length;
+  // Clear selection mỗi lần refetch tránh ghost selection
+  _orderState.selected = new Set(
+    Array.from(_orderState.selected).filter(code => _orders.some(o=>o.code===code))
+  );
+  _renderOrdersInner();
+}
 
-  c.innerHTML=`
-  <div class="admin-head"><h1>Đơn hàng</h1>
+function _renderOrdersInner(){
+  const st = _orderState;
+  const c = $("#adminContent");
+
+  // ===== STATS =====
+  const now = Date.now();
+  const todayStart = new Date(new Date().toDateString()).getTime();
+  const isToday = (iso)=> new Date(iso).getTime() >= todayStart;
+
+  const totalOrders   = _orders.length;
+  const todayOrders   = _orders.filter(o=>isToday(o.created_at)).length;
+  const pending       = _orders.filter(o=>o.status==="pending").length;
+  const slowConfirm   = _orders.filter(o=>o.status==="pending" && (now - new Date(o.created_at)) > SLOW_CONFIRM_HOURS*3600*1000).length;
+  const needShip      = _orders.filter(o=>o.status==="confirmed" && !o.ghn_order_code).length;
+  const late          = _orders.filter(o=>o.ghn_expected_at && new Date(o.ghn_expected_at) < now && !["delivered","cancel","returned"].includes(o.ghn_status)).length;
+  const completed     = _orders.filter(o=>o.status==="completed");
+  const revenueAll    = completed.reduce((s,o)=>s+(o.total||0),0);
+  const revenueToday  = completed.filter(o=>isToday(o.created_at)).reduce((s,o)=>s+(o.total||0),0);
+  const avgOrderValue = completed.length ? Math.round(revenueAll / completed.length) : 0;
+
+  // ===== FILTERED LIST =====
+  const filtered = _orders.filter(o => _orderMatches(o, st));
+  const sorted = _sortOrders(filtered, st.sort);
+  const allSelected = sorted.length > 0 && sorted.every(o => st.selected.has(o.code));
+  const selectedArr = Array.from(st.selected);
+  const selectedHasGhn = selectedArr.filter(code => _orders.find(o=>o.code===code)?.ghn_order_code);
+
+  // ===== TEMPLATE =====
+  c.innerHTML = `
+  <div class="admin-head">
+    <h1>Đơn hàng</h1>
     <div class="admin-actions">
-      <select class="statusSelect" id="ofilter">
-        <option value="">Tất cả trạng thái</option>
-        ${Object.keys(STATUS).map(k=>`<option value="${k}" ${filter===k?"selected":""}>${STATUS[k]}</option>`).join("")}
-      </select>
       <button class="mini" id="refreshO">↻ Tải lại</button>
     </div>
   </div>
-  <div class="stats">
-    <div class="stat"><div class="k">Tổng đơn</div><div class="v">${_orders.length}</div></div>
-    <div class="stat"><div class="k">Chờ xác nhận</div><div class="v sale">${pending}</div></div>
-    <div class="stat"><div class="k">Hoàn thành</div><div class="v green">${_orders.filter(o=>o.status==="completed").length}</div></div>
-    <div class="stat"><div class="k">Doanh thu (đã hoàn thành)</div><div class="v">${money(revenue)}</div></div>
-  </div>
-  ${list.length? `<div class="tablewrap"><table class="tbl">
-    <thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>SĐT</th><th>SP</th><th>Tổng</th><th>Trạng thái</th><th>Ngày</th><th></th></tr></thead>
-    <tbody>${list.map(o=>`<tr>
-      <td><b>${esc(o.code)}</b>${o.ghn_order_code?` <span title="Đã đẩy GHN: ${esc(o.ghn_order_code)}" style="font-size:11px">🚚</span>`:""}</td>
-      <td>${esc(o.customer_name||"")}</td>
-      <td>${esc(o.phone||"")}</td>
-      <td>${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
-      <td><b>${money(o.total||0)}</b></td>
-      <td><select class="statusSelect ostatus" data-id="${esc(o.id||o.code)}" style="border-color:${STATUS_COLOR[o.status]||'#ccc'}">
-        ${Object.keys(STATUS).map(k=>`<option value="${k}" ${o.status===k?"selected":""}>${STATUS[k]}</option>`).join("")}
-      </select></td>
-      <td>${new Date(o.created_at).toLocaleDateString("vi-VN")}</td>
-      <td><button class="mini odetail" data-code="${esc(o.code)}">Xem</button></td>
-    </tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty-state">Chưa có đơn hàng nào.</div>`}`;
 
-  $("#ofilter").onchange=e=>renderOrders(e.target.value);
-  $("#refreshO").onclick=()=>renderOrders(filter);
+  <div class="stats stats-grid-6">
+    <button type="button" class="stat stat-click ${!st.status&&!st.smart?'active':''}" data-action="all">
+      <div class="k">Tổng đơn</div><div class="v">${totalOrders}</div>
+      <div class="sub muted">+${todayOrders} hôm nay</div>
+    </button>
+    <button type="button" class="stat stat-click ${st.smart==='slowConfirm'?'active stat-warn':''}" data-action="slowConfirm">
+      <div class="k">Quá hạn xác nhận</div><div class="v ${slowConfirm?'sale':''}">${slowConfirm}</div>
+      <div class="sub muted">${pending} chờ xác nhận</div>
+    </button>
+    <button type="button" class="stat stat-click ${st.smart==='needShip'?'active stat-info':''}" data-action="needShip">
+      <div class="k">Cần gửi GHN</div><div class="v ${needShip?'info':''}">${needShip}</div>
+      <div class="sub muted">đã xác nhận, chưa push</div>
+    </button>
+    <button type="button" class="stat stat-click ${st.smart==='late'?'active stat-danger':''}" data-action="late">
+      <div class="k">Trễ giao</div><div class="v ${late?'sale':''}">${late}</div>
+      <div class="sub muted">quá ngày dự kiến</div>
+    </button>
+    <div class="stat">
+      <div class="k">Doanh thu hôm nay</div><div class="v">${money(revenueToday)}</div>
+      <div class="sub muted">tổng ${money(revenueAll)}</div>
+    </div>
+    <div class="stat">
+      <div class="k">Giá trị TB / đơn</div><div class="v">${money(avgOrderValue)}</div>
+      <div class="sub muted">${completed.length} đơn hoàn thành</div>
+    </div>
+  </div>
+
+  <div class="filter-bar">
+    <div class="fb-search">
+      <input id="oSearch" type="search" placeholder="Tìm mã đơn, tên, SĐT…" value="${esc(st.q||'')}">
+    </div>
+    <div class="fb-pills" role="tablist" aria-label="Lọc theo trạng thái">
+      <button type="button" class="pill ${!st.status&&!st.smart?'active':''}" data-status="">Tất cả</button>
+      ${Object.keys(STATUS).map(k=>`<button type="button" class="pill ${st.status===k?'active':''}" data-status="${k}" style="--pill-color:${STATUS_COLOR[k]}">${STATUS[k]}</button>`).join("")}
+    </div>
+    <div class="fb-secondary">
+      <select id="oDateRange" class="statusSelect">
+        <option value="all"   ${st.dateRange==='all'?'selected':''}>Mọi thời gian</option>
+        <option value="today" ${st.dateRange==='today'?'selected':''}>Hôm nay</option>
+        <option value="7d"    ${st.dateRange==='7d'?'selected':''}>7 ngày qua</option>
+        <option value="30d"   ${st.dateRange==='30d'?'selected':''}>30 ngày qua</option>
+      </select>
+      <select id="oSort" class="statusSelect">
+        <option value="newest"    ${st.sort==='newest'?'selected':''}>Mới nhất</option>
+        <option value="oldest"    ${st.sort==='oldest'?'selected':''}>Cũ nhất</option>
+        <option value="totalDesc" ${st.sort==='totalDesc'?'selected':''}>Giá trị cao</option>
+        <option value="lateFirst" ${st.sort==='lateFirst'?'selected':''}>Sắp/đã trễ giao</option>
+      </select>
+      ${(st.q||st.status||st.smart||st.dateRange!=='all'||st.sort!=='newest') ? `<button type="button" class="mini ghost" id="oClearFilter">Xoá lọc</button>` : ""}
+    </div>
+  </div>
+
+  ${st.selected.size ? `
+  <div class="bulk-bar">
+    <div><b>${st.selected.size}</b> đơn đã chọn ${selectedHasGhn.length<st.selected.size ? `<span class="muted">(${selectedHasGhn.length} có vận đơn GHN)</span>` : ""}</div>
+    <div class="bb-actions">
+      <select id="bulkPrintSize" class="statusSelect" title="Khổ giấy in">
+        <option value="A5" selected>A5</option>
+        <option value="A6">A6</option>
+        <option value="80x80">80×80mm</option>
+        <option value="52x70">52×70mm</option>
+      </select>
+      <button class="btn btn-dark btn-sm" id="bulkPrint" ${selectedHasGhn.length?"":"disabled"}>🖨 In tem GHN (${selectedHasGhn.length})</button>
+      <button class="mini" id="bulkClear">Bỏ chọn</button>
+    </div>
+  </div>
+  ` : ""}
+
+  ${sorted.length ? `<div class="tablewrap"><table class="tbl tbl-orders">
+    <thead><tr>
+      <th class="th-tick"><input type="checkbox" id="tickAll" ${allSelected?'checked':''}></th>
+      <th>Mã đơn</th>
+      <th>Khách hàng</th>
+      <th>SĐT</th>
+      <th>SP</th>
+      <th>Tổng</th>
+      <th>Trạng thái</th>
+      <th>Ngày đặt</th>
+      <th></th>
+    </tr></thead>
+    <tbody>${sorted.map(o=>{
+      const checked = st.selected.has(o.code) ? "checked" : "";
+      const isSlow = o.status==="pending" && (now - new Date(o.created_at)) > SLOW_CONFIRM_HOURS*3600*1000;
+      const isLate = o.ghn_expected_at && new Date(o.ghn_expected_at) < now && !["delivered","cancel","returned"].includes(o.ghn_status);
+      const rowClass = isLate ? "row-late" : (isSlow ? "row-slow" : "");
+      const badges = [];
+      if(o.ghn_order_code) badges.push(`<span class="rb rb-ghn" title="Đã đẩy GHN: ${esc(o.ghn_order_code)}">🚚 GHN</span>`);
+      if(isSlow) badges.push(`<span class="rb rb-warn" title="Pending > ${SLOW_CONFIRM_HOURS}h">⏰ Chậm</span>`);
+      if(isLate) badges.push(`<span class="rb rb-danger" title="Đã quá ngày dự kiến giao">⚠️ Trễ</span>`);
+      return `<tr class="${rowClass}">
+        <td class="th-tick"><input type="checkbox" class="tick" data-code="${esc(o.code)}" ${checked}></td>
+        <td><b>${esc(o.code)}</b><div class="row-badges">${badges.join("")}</div></td>
+        <td>${esc(o.customer_name||"")}</td>
+        <td>${esc(o.phone||"")}</td>
+        <td>${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
+        <td><b>${money(o.total||0)}</b></td>
+        <td><select class="statusSelect ostatus" data-id="${esc(o.id||o.code)}" style="border-color:${STATUS_COLOR[o.status]||'#ccc'}">
+          ${Object.keys(STATUS).map(k=>`<option value="${k}" ${o.status===k?"selected":""}>${STATUS[k]}</option>`).join("")}
+        </select></td>
+        <td>
+          <div>${new Date(o.created_at).toLocaleDateString("vi-VN")}</div>
+          <div class="muted" style="font-size:11px">${_timeAgo(o.created_at)}</div>
+        </td>
+        <td><button class="mini odetail" data-code="${esc(o.code)}">Xem</button></td>
+      </tr>`;
+    }).join("")}</tbody></table></div>
+    <div class="result-count muted" style="margin-top:10px;font-size:12.5px">Hiển thị ${sorted.length} / ${_orders.length} đơn</div>
+    `
+    : `<div class="empty-state">${(st.q||st.status||st.smart||st.dateRange!=='all') ? "Không có đơn nào khớp bộ lọc." : "Chưa có đơn hàng nào."}</div>`}`;
+
+  // ===== BIND EVENTS =====
+  $("#refreshO").onclick = ()=>renderOrders();
+
+  // Stats click → smart filter
+  $$(".stat-click").forEach(el => el.onclick = ()=>{
+    const act = el.dataset.action;
+    if(act === "all"){ st.smart = ""; st.status = ""; }
+    else { st.smart = (st.smart === act) ? "" : act; st.status = ""; }
+    _renderOrdersInner();
+  });
+
+  // Search (debounced)
+  const sEl = $("#oSearch");
+  if(sEl){
+    let to;
+    sEl.oninput = e =>{
+      clearTimeout(to);
+      to = setTimeout(()=>{
+        st.q = e.target.value.trim();
+        _renderOrdersInner();
+        // Restore focus + cursor sau re-render
+        setTimeout(()=>{ const ne=$("#oSearch"); if(ne){ ne.focus(); ne.setSelectionRange(ne.value.length,ne.value.length); } }, 0);
+      }, 220);
+    };
+  }
+
+  // Status pills
+  $$(".fb-pills .pill").forEach(b => b.onclick = ()=>{
+    st.status = b.dataset.status;
+    st.smart = "";
+    _renderOrdersInner();
+  });
+
+  // Date range + sort
+  const drEl = $("#oDateRange"); if(drEl) drEl.onchange = e =>{ st.dateRange = e.target.value; _renderOrdersInner(); };
+  const sortEl = $("#oSort"); if(sortEl) sortEl.onchange = e =>{ st.sort = e.target.value; _renderOrdersInner(); };
+  const clearEl = $("#oClearFilter"); if(clearEl) clearEl.onclick = ()=>{
+    st.q = ""; st.status = ""; st.smart = ""; st.dateRange = "all"; st.sort = "newest";
+    _renderOrdersInner();
+  };
+
+  // Bulk: tick all / individual
+  const ta = $("#tickAll"); if(ta) ta.onchange = e =>{
+    if(e.target.checked) sorted.forEach(o => st.selected.add(o.code));
+    else sorted.forEach(o => st.selected.delete(o.code));
+    _renderOrdersInner();
+  };
+  $$(".tick").forEach(cb => cb.onchange = e =>{
+    if(e.target.checked) st.selected.add(cb.dataset.code);
+    else st.selected.delete(cb.dataset.code);
+    _renderOrdersInner();
+  });
+
+  // Bulk action: print
+  const bp = $("#bulkPrint"); if(bp) bp.onclick = async ()=>{
+    if(!window.GHN || !window.GHN.enabled){ toast("GHN chưa cấu hình"); return; }
+    const codes = Array.from(st.selected).filter(code => _orders.find(o=>o.code===code)?.ghn_order_code);
+    if(!codes.length){ toast("Chưa đơn nào được chọn có vận đơn GHN"); return; }
+    const size = $("#bulkPrintSize")?.value || "A5";
+    bp.disabled = true; const old = bp.textContent; bp.textContent = "Đang tạo PDF…";
+    const tab = window.open("about:blank", "_blank");
+    try{
+      const r = await GHN.printUrl(codes, size);
+      if(tab) tab.location.href = r.url;
+      const skipMsg = r.skipped?.length ? ` (bỏ qua ${r.skipped.length} đơn không có GHN)` : "";
+      toast(`Đã mở tem ${r.size} cho ${r.count} đơn${skipMsg}`);
+    }catch(e){
+      if(tab) tab.close();
+      toast("Lỗi in: " + (e.message||e));
+    }finally{
+      bp.disabled = false; bp.textContent = old;
+    }
+  };
+  const bc = $("#bulkClear"); if(bc) bc.onclick = ()=>{ st.selected.clear(); _renderOrdersInner(); };
+
+  // Status select inline + detail
   $$(".ostatus").forEach(sel=> sel.onchange=async()=>{
     const prev = (_orders.find(o=>(o.id||o.code)===sel.dataset.id)||{}).status;
     try{
       await DB.updateOrderStatus(sel.dataset.id, sel.value);
-      // Cập nhật _orders local — không refetch
       const o = _orders.find(x=>(x.id||x.code)===sel.dataset.id);
       if(o) o.status = sel.value;
       sel.style.borderColor=STATUS_COLOR[sel.value];
       toast("Đã cập nhật trạng thái");
+      // Re-render để stats cập nhật theo
+      _renderOrdersInner();
     }catch(e){ toast("Lỗi: "+(e.message||e)); sel.value = prev||"pending"; }
   });
   $$(".odetail").forEach(b=> b.onclick=()=>{ const o=_orders.find(x=>x.code===b.dataset.code); if(o) orderModal(o); });
@@ -1081,14 +1347,31 @@ function renderGhnBox(o){
         ${o.ghn_fee ? `<div>Phí GHN thực tế: <b>${money(o.ghn_fee)}</b></div>` : ""}
         ${o.ghn_expected_at ? `<div>Dự kiến giao: <b>${new Date(o.ghn_expected_at).toLocaleDateString("vi-VN")}</b></div>` : ""}
       </div>
-      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
         <button class="mini" id="ghnTrack">↻ Cập nhật trạng thái</button>
+        <div style="display:inline-flex;align-items:center;gap:4px">
+          <button class="mini" id="ghnPrint" title="Mở tem dán hàng trong tab mới">🖨 In tem</button>
+          <select id="ghnPrintSize" class="mini" style="font-size:11px;padding:5px 4px;cursor:pointer" title="Khổ giấy in">
+            <option value="A5" selected>A5</option>
+            <option value="A6">A6</option>
+            <option value="80x80">80×80mm</option>
+            <option value="52x70">52×70mm</option>
+          </select>
+        </div>
         ${["delivered","cancel","returned"].includes(o.ghn_status) ? "" :
           `<button class="mini danger" id="ghnCancel">Huỷ vận đơn</button>`}
       </div>
     ` : `
       <p class="muted" style="font-size:13px;margin-bottom:10px">Chưa tạo vận đơn. Bấm để gửi đơn này sang GHN — họ sẽ tới lấy hàng.</p>
-      <button class="btn btn-dark" id="ghnCreate" style="padding:10px 18px">Tạo đơn GHN</button>
+      <label class="ghn-note-pick">
+        <span class="muted" style="font-size:12px;font-weight:600">Cho khách kiểm tra hàng?</span>
+        <select id="ghnRequiredNote" class="statusSelect" style="font-size:12.5px">
+          <option value="KHONGCHOXEMHANG"     ${(o.requiredNoteOverride||window.CONFIG?.DEFAULT_REQUIRED_NOTE||'KHONGCHOXEMHANG')==='KHONGCHOXEMHANG'?'selected':''}>🚫 Không cho xem hàng</option>
+          <option value="CHOXEMHANGKHONGTHU"  ${o.requiredNoteOverride==='CHOXEMHANGKHONGTHU'?'selected':''}>👀 Cho xem, không cho thử</option>
+          <option value="CHOTHUHANG"          ${o.requiredNoteOverride==='CHOTHUHANG'?'selected':''}>👕 Cho thử hàng</option>
+        </select>
+      </label>
+      <button class="btn btn-dark" id="ghnCreate" style="padding:10px 18px;margin-top:10px">Tạo đơn GHN</button>
     `}
     <div id="ghnMsg" class="muted" style="font-size:12px;margin-top:10px"></div>
   </div>`;
@@ -1100,7 +1383,9 @@ function renderGhnBox(o){
   if(btnCreate) btnCreate.onclick = async ()=>{
     btnCreate.disabled = true; btnCreate.textContent = "Đang tạo…"; setMsg("");
     try{
-      const data = await GHN.createOrder(o.code);
+      const noteSel = $("#ghnRequiredNote");
+      const required_note = noteSel ? noteSel.value : undefined;
+      const data = await GHN.createOrder(o.code, required_note ? { required_note } : {});
       toast(`Đã tạo vận đơn: ${data.order_code}`);
       // Refresh đơn từ DB và re-render box
       const fresh = await DB.getOrderByCode(o.code);
@@ -1125,6 +1410,24 @@ function renderGhnBox(o){
     }catch(e){
       btnTrack.disabled = false; btnTrack.textContent = "↻ Cập nhật trạng thái";
       setMsg("Lỗi: " + e.message, "var(--sale)");
+    }
+  };
+
+  const btnPrint = $("#ghnPrint");
+  if(btnPrint) btnPrint.onclick = async ()=>{
+    const size = $("#ghnPrintSize")?.value || "A5";
+    btnPrint.disabled = true; const old = btnPrint.textContent; btnPrint.textContent = "Đang tạo…"; setMsg("");
+    // Mở tab trước (trong onclick) để né popup blocker. Sau đó set URL khi có token.
+    const tab = window.open("about:blank", "_blank");
+    try{
+      const r = await GHN.printUrl(o.code, size);
+      if(tab) tab.location.href = r.url;
+      setMsg(`Đã mở tem ${r.size} (token có hạn ~10 phút)`, "var(--muted)");
+    }catch(e){
+      if(tab) tab.close();
+      setMsg("Lỗi in tem: " + e.message, "var(--sale)");
+    }finally{
+      btnPrint.disabled = false; btnPrint.textContent = old;
     }
   };
 

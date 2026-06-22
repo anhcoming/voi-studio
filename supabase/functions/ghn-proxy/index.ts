@@ -206,10 +206,16 @@ async function handleCreate(supa: SupabaseClient, p: any) {
     weight:   p.item_weight || 200,
   }));
 
+  // Whitelist required_note để chống inject lung tung từ FE
+  const NOTE_VALUES = new Set(["KHONGCHOXEMHANG", "CHOXEMHANGKHONGTHU", "CHOTHUHANG"]);
+  const requiredNote = NOTE_VALUES.has(p.required_note)
+    ? p.required_note
+    : (cfg.required_note || "KHONGCHOXEMHANG");
+
   const payload = {
     payment_type_id:  cfg.payment_type_id || 2,        // 1=shop trả, 2=người nhận trả
     note:             o.note || "",
-    required_note:    cfg.required_note || "KHONGCHOXEMHANG",
+    required_note:    requiredNote,
     from_name:        cfg.from_name,
     from_phone:       cfg.from_phone,
     from_address:     cfg.from_address,
@@ -315,6 +321,52 @@ async function handleMaster(_supa: SupabaseClient, p: any) {
   throw new Error("type phải là province|district|ward");
 }
 
+// Tạo URL in vận đơn GHN — hỗ trợ in 1 hoặc nhiều đơn cùng lúc.
+// Input: { order_codes: string[] | order_code: string | ghn_order_codes: string[] | ghn_order_code, size }
+// Return: { url, size, token, count, skipped } — admin mở url trong tab mới.
+async function handlePrint(supa: SupabaseClient, p: any) {
+  let ghnCodes: string[] = [];
+  const skipped: string[] = [];
+
+  if (Array.isArray(p.ghn_order_codes) && p.ghn_order_codes.length) {
+    ghnCodes = p.ghn_order_codes.filter((x: any) => !!x);
+  } else if (Array.isArray(p.order_codes) && p.order_codes.length) {
+    const upper = p.order_codes.map((c: string) => String(c).toUpperCase().trim());
+    const r = await supa.from("orders").select("code,ghn_order_code").in("code", upper);
+    const map = new Map((r.data || []).map((row: any) => [row.code, row.ghn_order_code]));
+    for (const c of upper) {
+      const g = map.get(c);
+      if (g) ghnCodes.push(g); else skipped.push(c);
+    }
+  } else if (p.ghn_order_code) {
+    ghnCodes = [p.ghn_order_code];
+  } else if (p.order_code) {
+    const r = await supa.from("orders").select("ghn_order_code")
+      .eq("code", String(p.order_code).toUpperCase().trim()).maybeSingle();
+    if (r.data?.ghn_order_code) ghnCodes = [r.data.ghn_order_code];
+  }
+  if (!ghnCodes.length) throw new Error("Không có vận đơn GHN nào để in (đơn có thể chưa được push lên GHN)");
+
+  const allowed = new Set(["A5", "A6", "52x70", "80x80"]);
+  const size = allowed.has(p.size) ? p.size : "A5";
+
+  // GHN: POST /v2/a5/gen-token — hỗ trợ mảng nhiều mã, in liên tiếp trong 1 PDF.
+  const tokenData = await ghn("/v2/a5/gen-token", { order_codes: ghnCodes });
+  const token = tokenData?.token;
+  if (!token) throw new Error("GHN không trả về token in vận đơn");
+
+  const printBase = GHN_ENV === "dev"
+    ? "https://dev-online-gateway.ghn.vn/a5/public-api"
+    : "https://online-gateway.ghn.vn/a5/public-api";
+  const pathBySize: Record<string, string> = {
+    "A5":   `/printA5?token=${token}`,
+    "A6":   `/printA6?token=${token}`,
+    "52x70":`/print52x70?token=${token}`,
+    "80x80":`/print80x80?token=${token}`,
+  };
+  return { url: `${printBase}${pathBySize[size]}`, size, token, count: ghnCodes.length, skipped };
+}
+
 async function getShopCfg(supa: SupabaseClient) {
   const r = await supa.from("site_settings").select("value").eq("key", "ghn_config").maybeSingle();
   return r.data?.value || {};
@@ -353,7 +405,7 @@ Deno.serve(async (req) => {
 
     // Một số action chỉ admin mới được gọi — verify JWT + check admin_emails table.
     // [DIAG-v3] Có log chi tiết trong response để debug 403.
-    const adminActions = new Set(["create", "cancel"]);
+    const adminActions = new Set(["create", "cancel", "print"]);
     if (adminActions.has(action)) {
       const authHeader = req.headers.get("authorization") || "";
       const jwt = authHeader.replace(/^Bearer\s+/i, "");
@@ -404,6 +456,7 @@ Deno.serve(async (req) => {
       case "track":   data = await handleTrack(supa, body);  break;
       case "cancel":  data = await handleCancel(supa, body); break;
       case "master":  data = await handleMaster(supa, body); break;
+      case "print":   data = await handlePrint(supa, body);  break;
       case "resolve": data = await resolveAddress(
                           supa, body.province_name, body.district_name, body.ward_name); break;
       default: return json({ error: `Action không hợp lệ: ${action}` }, 400);

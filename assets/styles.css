@@ -937,3 +937,52 @@ input,textarea,select{font-family:inherit}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
+
+/* ============ GHN TRACKING (order.html) ============ */
+.ghn-track{margin-top:22px;padding:22px;border:1px solid var(--line);border-radius:var(--radius);background:#fff}
+.ghn-track-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.ghn-track-head h3{font-family:var(--font-display);font-size:16px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.ghn-meta{font-size:13px;color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.ghn-code{font-family:var(--font-display);font-weight:700;letter-spacing:.06em;color:var(--ink);background:var(--bg-soft);padding:3px 9px;border-radius:6px}
+.ghn-copy{font-size:11px;background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer;color:var(--ink-soft);transition:border-color .15s,color .15s}
+.ghn-copy:hover{border-color:var(--ink);color:var(--ink)}
+.ghn-eta{font-size:13px;color:var(--ink-soft)}
+.ghn-status-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.ghn-status-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:999px;font-weight:600;font-size:13px;color:#fff;letter-spacing:.02em}
+.ghn-refresh-tag{font-size:12px;opacity:.7}
+.ghn-refresh-tag::before{content:"";display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;margin-right:6px;vertical-align:-1px;animation:ghn-spin .8s linear infinite}
+@keyframes ghn-spin{to{transform:rotate(360deg)}}
+
+/* mini timeline (4 mốc rút gọn) */
+.ghn-mini-timeline{position:relative;display:grid;grid-template-columns:repeat(4,1fr);margin:8px 0 22px;padding:0 4px}
+.ghn-mini-timeline::before,.ghn-mini-timeline::after{content:"";position:absolute;top:11px;left:12.5%;right:12.5%;height:2px;border-radius:2px}
+.ghn-mini-timeline::before{background:var(--line)}
+.ghn-mini-timeline::after{background:var(--bar-color,#7a5cff);width:calc((100% - 25%) * var(--progress,0));transition:width .4s ease}
+.ghn-mile{position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center}
+.ghn-mile-dot{width:24px;height:24px;border-radius:50%;background:#fff;border:2px solid var(--line);position:relative;z-index:1;transition:background .25s,border-color .25s,transform .25s}
+.ghn-mile.done .ghn-mile-dot{background:var(--bar-color,#7a5cff);border-color:var(--bar-color,#7a5cff)}
+.ghn-mile.cur .ghn-mile-dot{transform:scale(1.18);box-shadow:0 0 0 5px rgba(122,92,255,.15)}
+.ghn-mile-label{font-size:11.5px;color:var(--muted);max-width:100px;line-height:1.35;font-weight:500}
+.ghn-mile.done .ghn-mile-label{color:var(--ink)}
+
+/* events list */
+.ghn-events-title{font-family:var(--font-display);font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin:18px 0 12px}
+.ghn-events{list-style:none;padding:0;margin:0;position:relative}
+.ghn-events::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line)}
+.ghn-events li{position:relative;padding:0 0 16px 24px}
+.ghn-events li:last-child{padding-bottom:0}
+.ghn-ev-dot{position:absolute;left:0;top:5px;width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid var(--ink)}
+.ghn-events li:first-child .ghn-ev-dot{background:var(--ink)}
+.ghn-ev-status{font-weight:600;font-size:14px;color:var(--ink);line-height:1.4}
+.ghn-ev-desc{font-size:13px;color:var(--ink-soft);margin-top:3px;line-height:1.5}
+.ghn-ev-time{font-size:12px;color:var(--muted);margin-top:4px}
+.ghn-ev-empty{padding:14px 0;font-size:13px;font-style:italic}
+
+@media(max-width:560px){
+  .ghn-track{padding:18px}
+  .ghn-track-head{flex-direction:column;align-items:stretch}
+  .ghn-track-head .btn{align-self:flex-start}
+  .ghn-mile-label{font-size:10.5px}
+  .ghn-mini-timeline::before,.ghn-mini-timeline::after{top:10px}
+}
+

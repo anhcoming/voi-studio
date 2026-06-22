@@ -84,6 +84,16 @@
       return await call("cancel", { order_code: orderCode }, { auth: true });
     },
 
+    /* Tạo URL in tem GHN. Nhận 1 mã hoặc mảng nhiều mã.
+       size: "A5" (mặc định) | "A6" | "52x70" | "80x80".
+       Return: { url, size, count, skipped }. */
+    async printUrl(orderCodes, size = "A5"){
+      if(Array.isArray(orderCodes)){
+        return await call("print", { order_codes: orderCodes, size }, { auth: true });
+      }
+      return await call("print", { order_code: orderCodes, size }, { auth: true });
+    },
+
     /* Master data — admin dùng khi setup shop origin. */
     async master(type, params={}){
       return await call("master", { type, ...params });

@@ -1933,6 +1933,7 @@ async function renderOrder(){
   <div class="wrap cart-wrap">
     <div>
       ${timeline}
+      <div id="ghnTrackBox"></div>
       <h3 style="font-family:var(--font-display);text-transform:uppercase;font-size:16px;margin:26px 0 8px">Sản phẩm (${(o.items||[]).length})</h3>
       ${items}
     </div>
@@ -1947,6 +1948,11 @@ async function renderOrder(){
       <a class="btn btn-outline btn-block" style="margin-top:16px" href="collection.html">Tiếp tục mua sắm</a>
     </aside>
   </div>`;
+
+  // GHN tracking — chỉ render khi đơn đã có mã vận đơn.
+  if(o.ghn_order_code){
+    renderGhnTrack(o);
+  }
   if(param("new")==="1"){
     const sentTo = sessionStorage.getItem("ck_email_sent_"+o.code);
     if(sentTo){
@@ -1956,6 +1962,145 @@ async function renderOrder(){
       toast("Đặt hàng thành công! Mã đơn: "+o.code);
     }
   }
+}
+
+/* ---------------- GHN TRACKING (khách) ----------------
+   Bật khi đơn đã có ghn_order_code. Tự pull GHN status mới nhất (qua edge
+   function `track`) rồi load events từ bảng ghn_tracking_events. Nếu auto
+   pull lỗi, vẫn fallback hiển thị snapshot DB hiện có. */
+const GHN_STATUS_VI = {
+  ready_to_pick:  "Chờ shipper lấy hàng",
+  picking:        "Đang lấy hàng",
+  money_collect_picking: "Đang lấy hàng",
+  picked:         "Đã lấy hàng",
+  storing:        "Đang ở kho GHN",
+  transporting:   "Đang vận chuyển",
+  sorting:        "Đang phân loại",
+  delivering:     "Đang giao tới bạn",
+  money_collect_delivering: "Đang giao tới bạn",
+  delivered:      "Giao thành công",
+  delivery_fail:  "Giao thất bại",
+  waiting_to_return: "Chờ trả hàng",
+  return:         "Đang trả hàng",
+  return_transporting: "Đang trả hàng",
+  return_sorting: "Đang phân loại trả",
+  returning:      "Đang trả về shop",
+  return_fail:    "Trả hàng thất bại",
+  returned:       "Đã trả hàng",
+  cancel:         "Đã huỷ",
+  exception:      "Có vấn đề",
+  damage:         "Hư hỏng",
+  lost:           "Thất lạc",
+};
+const GHN_DONE_ORDER = ["ready_to_pick","picking","picked","storing","transporting","sorting","delivering","delivered"];
+
+async function renderGhnTrack(o){
+  const box = $("#ghnTrackBox");
+  if(!box) return;
+  const ghnUrl = `https://tracking.ghn.dev/?order_code=${encodeURIComponent(o.ghn_order_code)}`;
+  const etaTxt = o.ghn_expected_at
+    ? `Dự kiến giao: <b>${new Date(o.ghn_expected_at).toLocaleString("vi-VN",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</b>`
+    : "";
+  const skeleton = (status, events, refreshing)=>{
+    const stName = GHN_STATUS_VI[status] || status || "Đang xử lý";
+    const stepIdx = Math.max(0, GHN_DONE_ORDER.indexOf(status));
+    const isDelivered = status === "delivered";
+    const isCancelled = status === "cancel" || status === "returned" || status === "return_fail";
+    const progressColor = isDelivered ? "var(--success,#1d9e75)" : isCancelled ? "var(--sale,#e02424)" : "#7a5cff";
+    // 4 mốc rút gọn (cho UI cảm giác liền mạch với timeline trên)
+    const milestones = [
+      { keys:["ready_to_pick"],                                    label:"Đã nhận đơn" },
+      { keys:["picking","money_collect_picking","picked","storing"], label:"Đã lấy hàng" },
+      { keys:["transporting","sorting","delivering","money_collect_delivering"], label:"Đang vận chuyển" },
+      { keys:["delivered"],                                        label:"Đã giao" },
+    ];
+    const reachedIdx = milestones.findIndex(m => m.keys.includes(status));
+    const progressFraction = isDelivered ? 1 : Math.max(0, reachedIdx) / (milestones.length-1);
+    const eventList = events.length
+      ? events.slice().reverse().map(e=>{
+          const dt = new Date(e.event_at || e.created_at).toLocaleString("vi-VN");
+          return `<li>
+            <div class="ghn-ev-dot"></div>
+            <div class="ghn-ev-body">
+              <div class="ghn-ev-status">${escapeXML(e.status_name || GHN_STATUS_VI[e.status] || e.status)}</div>
+              ${e.description ? `<div class="ghn-ev-desc">${escapeXML(e.description)}</div>` : ""}
+              <div class="ghn-ev-time">${dt}${e.location ? ` · ${escapeXML(e.location)}` : ""}</div>
+            </div>
+          </li>`;
+        }).join("")
+      : `<li class="ghn-ev-empty muted">Chưa có cập nhật chi tiết từ GHN.</li>`;
+    return `<section class="ghn-track">
+      <header class="ghn-track-head">
+        <div>
+          <h3>Vận đơn GHN</h3>
+          <div class="ghn-meta">
+            <span class="ghn-code">${escapeXML(o.ghn_order_code)}</span>
+            <button type="button" class="ghn-copy" data-c="${escapeXML(o.ghn_order_code)}" title="Sao chép mã">Copy</button>
+            ${etaTxt ? `<span class="ghn-eta">${etaTxt}</span>` : ""}
+          </div>
+        </div>
+        <a class="btn btn-outline btn-sm" href="${ghnUrl}" target="_blank" rel="noopener">Xem trên GHN ↗</a>
+      </header>
+      <div class="ghn-status-row">
+        <span class="ghn-status-pill" style="background:${progressColor}">${escapeXML(stName)}</span>
+        ${refreshing ? `<span class="muted ghn-refresh-tag">Đang cập nhật…</span>` : ""}
+      </div>
+      <div class="ghn-mini-timeline" style="--progress:${progressFraction};--bar-color:${progressColor}">
+        ${milestones.map((m,i)=>{
+          const done = i<=reachedIdx;
+          const cur  = i===reachedIdx && !isDelivered;
+          return `<div class="ghn-mile ${done?'done':''} ${cur?'cur':''}">
+            <div class="ghn-mile-dot"></div>
+            <div class="ghn-mile-label">${m.label}</div>
+          </div>`;
+        }).join("")}
+      </div>
+      <h4 class="ghn-events-title">Lịch sử vận chuyển</h4>
+      <ul class="ghn-events">${eventList}</ul>
+    </section>`;
+  };
+
+  // Render ngay với DB snapshot
+  let events = await DB.getTracking(o.code);
+  box.innerHTML = skeleton(o.ghn_status, events, !!(window.GHN && window.GHN.enabled));
+  bindGhnCopy(box);
+
+  // Pull GHN status mới nhất (best-effort, không block UI)
+  if(window.GHN && window.GHN.enabled){
+    try{
+      await GHN.track(o.code);
+      // Re-fetch event list + order để có status mới nhất sau khi pull
+      const [freshEvents, freshOrder] = await Promise.all([
+        DB.getTracking(o.code),
+        DB.getOrderByCode(o.code),
+      ]);
+      const status = (freshOrder && freshOrder.ghn_status) || o.ghn_status;
+      o.ghn_status = status;
+      o.ghn_expected_at = (freshOrder && freshOrder.ghn_expected_at) || o.ghn_expected_at;
+      box.innerHTML = skeleton(status, freshEvents, false);
+      bindGhnCopy(box);
+    }catch(e){
+      console.warn("[GHN.track] lỗi → giữ snapshot DB:", e.message);
+      // Xoá tag "Đang cập nhật…" mà thôi
+      box.innerHTML = skeleton(o.ghn_status, events, false);
+      bindGhnCopy(box);
+    }
+  }
+}
+
+function bindGhnCopy(box){
+  const btn = box.querySelector(".ghn-copy");
+  if(!btn) return;
+  btn.onclick = async ()=>{
+    try{
+      await navigator.clipboard.writeText(btn.dataset.c);
+      const old = btn.textContent;
+      btn.textContent = "Đã copy ✓";
+      setTimeout(()=>{ btn.textContent = old; }, 1500);
+    }catch(e){
+      console.warn("clipboard", e);
+    }
+  };
 }
 
 /* ---------------- CATEGORIES ---------------- */
