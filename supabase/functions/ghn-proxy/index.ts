@@ -327,20 +327,22 @@ Deno.serve(async (req) => {
     // Service-role client để bỏ qua RLS (đã xác thực qua action)
     const supa = createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: false } });
 
-    // Một số action chỉ admin mới được gọi — verify bằng JWT của caller
+    // Một số action chỉ admin mới được gọi — verify bằng JWT của caller.
+    // Verify trực tiếp với JWT (không rely vào session storage của SDK) +
+    // check email trong bảng admin_emails qua service-role (không cần auth.jwt()
+    // bên SQL — tránh phụ thuộc cách Supabase inject ANON_KEY ở key-system mới).
     const adminActions = new Set(["create", "cancel"]);
     if (adminActions.has(action)) {
       const authHeader = req.headers.get("authorization") || "";
       const jwt = authHeader.replace(/^Bearer\s+/i, "");
       if (!jwt) return json({ error: "Cần đăng nhập admin" }, 401);
-      const supaAnon = createClient(SUPA_URL, Deno.env.get("SUPABASE_ANON_KEY") || "", {
-        global: { headers: { authorization: `Bearer ${jwt}` } },
-        auth: { persistSession: false },
-      });
-      const u = await supaAnon.auth.getUser();
-      const isAdmin = await supaAnon.rpc("is_admin");
-      if (!u.data?.user || isAdmin.data !== true) {
-        return json({ error: "Chỉ admin mới được tạo/huỷ đơn GHN" }, 403);
+      const u = await supa.auth.getUser(jwt);
+      const email = (u.data?.user?.email || "").toLowerCase();
+      if (!email) return json({ error: "Token không hợp lệ hoặc đã hết hạn" }, 401);
+      const inTable = await supa.from("admin_emails").select("email").eq("email", email).maybeSingle();
+      const bootstrap = !inTable.data && email === "anhcoming@gmail.com";
+      if (!inTable.data && !bootstrap) {
+        return json({ error: `Email ${email} không có quyền admin (chưa trong bảng admin_emails)` }, 403);
       }
     }
 
