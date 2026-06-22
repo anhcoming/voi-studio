@@ -1168,21 +1168,29 @@ function _renderOrdersInner(){
       if(o.ghn_order_code) badges.push(`<span class="rb rb-ghn" title="Đã đẩy GHN: ${esc(o.ghn_order_code)}">🚚 GHN</span>`);
       if(isSlow) badges.push(`<span class="rb rb-warn" title="Pending > ${SLOW_CONFIRM_HOURS}h">⏰ Chậm</span>`);
       if(isLate) badges.push(`<span class="rb rb-danger" title="Đã quá ngày dự kiến giao">⚠️ Trễ</span>`);
+      const printBtn = o.ghn_order_code
+        ? `<button class="mini icon-only oprint" data-code="${esc(o.code)}" title="In tem GHN (A5)">🖨</button>`
+        : `<button class="mini icon-only" disabled title="Chưa có vận đơn GHN — tạo trong chi tiết">🖨</button>`;
       return `<tr class="${rowClass}">
-        <td class="th-tick"><input type="checkbox" class="tick" data-code="${esc(o.code)}" ${checked}></td>
-        <td><b>${esc(o.code)}</b><div class="row-badges">${badges.join("")}</div></td>
-        <td>${esc(o.customer_name||"")}</td>
-        <td>${esc(o.phone||"")}</td>
-        <td>${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
-        <td><b>${money(o.total||0)}</b></td>
-        <td><select class="statusSelect ostatus" data-id="${esc(o.id||o.code)}" style="border-color:${STATUS_COLOR[o.status]||'#ccc'}">
+        <td class="th-tick" data-label="Chọn"><input type="checkbox" class="tick" data-code="${esc(o.code)}" ${checked}></td>
+        <td data-label="Mã đơn"><b>${esc(o.code)}</b><div class="row-badges">${badges.join("")}</div></td>
+        <td data-label="Khách hàng">${esc(o.customer_name||"")}</td>
+        <td data-label="SĐT">${esc(o.phone||"")}</td>
+        <td data-label="SP" class="cell-num">${(o.items||[]).reduce((s,i)=>s+i.qty,0)}</td>
+        <td data-label="Tổng" class="cell-num"><b>${money(o.total||0)}</b></td>
+        <td data-label="Trạng thái"><select class="statusSelect ostatus" data-id="${esc(o.id||o.code)}" style="border-color:${STATUS_COLOR[o.status]||'#ccc'}">
           ${Object.keys(STATUS).map(k=>`<option value="${k}" ${o.status===k?"selected":""}>${STATUS[k]}</option>`).join("")}
         </select></td>
-        <td>
+        <td data-label="Ngày đặt">
           <div>${new Date(o.created_at).toLocaleDateString("vi-VN")}</div>
           <div class="muted" style="font-size:11px">${_timeAgo(o.created_at)}</div>
         </td>
-        <td><button class="mini odetail" data-code="${esc(o.code)}">Xem</button></td>
+        <td data-label="Hành động" class="cell-actions">
+          <div class="row-actions">
+            <button class="mini odetail" data-code="${esc(o.code)}">Xem</button>
+            ${printBtn}
+          </div>
+        </td>
       </tr>`;
     }).join("")}</tbody></table></div>
     <div class="result-count muted" style="margin-top:10px;font-size:12.5px">Hiển thị ${sorted.length} / ${_orders.length} đơn</div>
@@ -1278,6 +1286,23 @@ function _renderOrdersInner(){
     }catch(e){ toast("Lỗi: "+(e.message||e)); sel.value = prev||"pending"; }
   });
   $$(".odetail").forEach(b=> b.onclick=()=>{ const o=_orders.find(x=>x.code===b.dataset.code); if(o) orderModal(o); });
+
+  // In tem 1 đơn ngay từ row (default A5)
+  $$(".oprint").forEach(b=> b.onclick=async()=>{
+    if(!window.GHN || !window.GHN.enabled){ toast("GHN chưa cấu hình"); return; }
+    const code = b.dataset.code;
+    b.disabled = true; const old = b.textContent; b.textContent = "⏳";
+    const tab = window.open("about:blank", "_blank");
+    try{
+      const r = await GHN.printUrl(code, "A5");
+      if(tab) tab.location.href = r.url;
+    }catch(e){
+      if(tab) tab.close();
+      toast("Lỗi in: " + (e.message||e));
+    }finally{
+      b.disabled = false; b.textContent = old;
+    }
+  });
 }
 
 function orderModal(o){

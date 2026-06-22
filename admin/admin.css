@@ -221,22 +221,142 @@ table.tbl tr:hover td{background:#fafafa}
 .tbl-orders tr.row-late td{background:#fff5f5}
 .tbl-orders tr.row-slow:hover td{background:#fff7e6}
 .tbl-orders tr.row-late:hover td{background:#ffeded}
+.cell-num{text-align:right;font-variant-numeric:tabular-nums}
+.cell-actions{white-space:nowrap}
+.row-actions{display:inline-flex;gap:6px;align-items:center}
+.mini.icon-only{padding:6px 10px;min-width:36px;justify-content:center}
+.mini.icon-only:disabled{opacity:.35;cursor:not-allowed}
 
 /* GHN note picker (trước khi tạo đơn) */
 .ghn-note-pick{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-width:280px}
 .ghn-note-pick .statusSelect{padding:8px 30px 8px 12px}
 
-/* ============ RESPONSIVE ============ */
+/* =========================================================
+   RESPONSIVE — tablet & mobile
+   ========================================================= */
+
+/* Tablet ≤ 1100px */
 @media(max-width:1100px){
   .stats-grid-6{grid-template-columns:repeat(3,1fr)}
   .filter-bar{grid-template-columns:1fr;gap:10px}
-  .fb-secondary{justify-content:flex-start}
+  .fb-secondary{justify-content:flex-start;flex-wrap:wrap}
 }
-@media(max-width:720px){
-  .stats{grid-template-columns:repeat(2,1fr)}
-  .stats-grid-6{grid-template-columns:repeat(2,1fr)}
+
+/* Tablet hẹp / mobile ngang ≤ 820px */
+@media(max-width:820px){
+  .admin-wrap{padding:18px 14px 90px}
+  .admin-head h1{font-size:22px}
+  .admin-tabs .row{overflow-x:auto;padding:0 14px;scrollbar-width:none}
+  .admin-tabs .row::-webkit-scrollbar{display:none}
+  .admin-tabs button{white-space:nowrap;padding:13px 14px;font-size:13px}
+  .admin-top .row{padding:0 14px;gap:10px;height:56px}
+  .admin-tabs{top:56px}
+  .admin-top .logo{font-size:17px}
+  .admin-top .who{font-size:11.5px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .admin-top .badge-mode{font-size:10px;padding:3px 8px}
+
+  /* Stats: 2 cột */
+  .stats,.stats-grid-6{grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:18px}
+  .stat{padding:13px 14px}
+  .stat .v{font-size:22px}
+  .stat .sub{font-size:10.5px}
+
+  /* Filter bar */
+  .filter-bar{padding:12px;gap:10px}
+  .fb-pills{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:4px;margin:0 -4px;padding-left:4px;padding-right:4px}
+  .fb-pills::-webkit-scrollbar{display:none}
+  .fb-pills .pill{flex-shrink:0;font-size:12px;padding:6px 12px}
+  .fb-secondary{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .fb-secondary .mini.ghost{grid-column:1/-1}
+
+  /* Bulk bar — fixed bottom trên mobile */
+  .bulk-bar{
+    position:fixed;left:10px;right:10px;bottom:10px;
+    border-radius:14px;padding:12px 14px;z-index:30;
+    box-shadow:0 8px 30px rgba(0,0,0,.25);
+    flex-direction:column;align-items:stretch;
+    margin-bottom:0;
+  }
+  .bulk-bar > div:first-child{font-size:13px;text-align:center}
+  .bulk-bar b{font-size:14px}
+  .bulk-bar .bb-actions{justify-content:space-between;flex-wrap:wrap;gap:6px}
+  .bulk-bar .bb-actions > *{flex:1;min-width:0}
+  .bulk-bar .btn-sm{padding:9px 12px;font-size:12.5px;text-align:center}
+  /* Padding cuối page để bulk bar không che row */
+  body:has(.bulk-bar){padding-bottom:120px}
+
+  /* Form rows */
   .frow{grid-template-columns:1fr}
-  .admin-top .who{display:none}
-  .bulk-bar{flex-direction:column;align-items:stretch}
-  .bulk-bar .bb-actions{justify-content:flex-end;flex-wrap:wrap}
+}
+
+/* ============ ORDERS TABLE → CARD LAYOUT (≤820px) ============ */
+@media(max-width:820px){
+  /* Bao .tablewrap không cần border, mỗi card tự có border */
+  .tbl-orders{display:block;background:transparent;min-width:0}
+  .tablewrap:has(.tbl-orders){background:transparent;border:0;overflow:visible}
+  .tbl-orders thead{display:none}
+  .tbl-orders tbody{display:flex;flex-direction:column;gap:10px}
+  .tbl-orders tr{
+    display:grid;grid-template-columns:auto 1fr;gap:6px 12px;
+    background:#fff;border:1px solid var(--line);border-radius:12px;
+    padding:14px;align-items:center;
+  }
+  .tbl-orders tr.row-slow{background:#fffbf2;border-color:#f0d98a}
+  .tbl-orders tr.row-late{background:#fff5f5;border-color:#f0c5c5}
+  .tbl-orders tr:hover td{background:transparent}
+  .tbl-orders td{
+    display:block;padding:0;border:0;font-size:13.5px;line-height:1.4;
+  }
+  /* Label trước mỗi cell — hiện ở cards layout */
+  .tbl-orders td::before{
+    content:attr(data-label);
+    display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);font-weight:600;margin-bottom:2px;
+  }
+  /* Checkbox: vị trí góc trái, span 1 cột */
+  .tbl-orders td.th-tick{
+    grid-row:1;grid-column:1;padding:0;width:auto;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .tbl-orders td.th-tick::before{display:none}
+  .tbl-orders td.th-tick input{width:20px;height:20px}
+  /* Mã đơn: bên phải checkbox, span sang full nếu cần */
+  .tbl-orders td[data-label="Mã đơn"]{grid-row:1;grid-column:2;font-size:15px}
+  .tbl-orders td[data-label="Mã đơn"]::before{display:none}
+  .tbl-orders td[data-label="Mã đơn"] b{font-size:15px}
+  /* Hàng sau xếp 2 cột */
+  .tbl-orders td[data-label="Khách hàng"]{grid-column:1/-1;margin-top:6px;padding-top:10px;border-top:1px dashed var(--line)}
+  .tbl-orders td[data-label="SĐT"]{grid-column:1/-1}
+  .tbl-orders td[data-label="SP"]{grid-column:1;text-align:left}
+  .tbl-orders td[data-label="Tổng"]{grid-column:2;text-align:right}
+  .tbl-orders td.cell-num{text-align:left}
+  .tbl-orders td[data-label="Tổng"].cell-num{text-align:right}
+  .tbl-orders td[data-label="Trạng thái"]{grid-column:1/-1}
+  .tbl-orders td[data-label="Trạng thái"] .statusSelect{width:100%}
+  .tbl-orders td[data-label="Ngày đặt"]{grid-column:1/-1;display:flex;gap:8px;align-items:baseline}
+  .tbl-orders td[data-label="Ngày đặt"]::before{margin-bottom:0;align-self:center}
+  .tbl-orders td[data-label="Ngày đặt"] > div{display:inline}
+  .tbl-orders td.cell-actions{
+    grid-column:1/-1;margin-top:6px;padding-top:10px;
+    border-top:1px dashed var(--line);
+  }
+  .tbl-orders td.cell-actions::before{display:none}
+  .tbl-orders .row-actions{width:100%;display:flex;gap:8px}
+  .tbl-orders .row-actions .mini{flex:1;justify-content:center;padding:9px 12px;font-size:13px}
+  .tbl-orders .row-actions .mini.icon-only{flex:0 0 auto;min-width:44px}
+  .result-count{text-align:center;padding-bottom:14px}
+}
+
+/* Mobile dọc ≤ 480px */
+@media(max-width:480px){
+  .admin-head{margin-bottom:14px}
+  .admin-head h1{font-size:20px}
+  .stats,.stats-grid-6{grid-template-columns:1fr 1fr;gap:8px}
+  .stat{padding:11px 12px}
+  .stat .k{font-size:11px}
+  .stat .v{font-size:19px}
+  .stat .sub{font-size:10px}
+  .filter-bar{padding:10px}
+  .fb-search input{padding:9px 12px 9px 34px;font-size:13px;background-position:10px center}
+  .fb-secondary{grid-template-columns:1fr}
 }

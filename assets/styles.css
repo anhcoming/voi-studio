@@ -979,10 +979,27 @@ input,textarea,select{font-family:inherit}
 .ghn-ev-empty{padding:14px 0;font-size:13px;font-style:italic}
 
 @media(max-width:560px){
-  .ghn-track{padding:18px}
-  .ghn-track-head{flex-direction:column;align-items:stretch}
+  .ghn-track{padding:16px 14px;margin-top:16px}
+  .ghn-track-head{flex-direction:column;align-items:stretch;gap:10px}
   .ghn-track-head .btn{align-self:flex-start}
-  .ghn-mile-label{font-size:10.5px}
-  .ghn-mini-timeline::before,.ghn-mini-timeline::after{top:10px}
+  .ghn-meta{font-size:12px;gap:8px}
+  .ghn-code{font-size:12.5px;padding:2px 7px}
+  .ghn-eta{flex-basis:100%;font-size:12px}
+  .ghn-status-row{gap:8px}
+  .ghn-status-pill{font-size:12px;padding:5px 11px}
+  .ghn-mini-timeline{padding:0;margin:6px 0 18px}
+  .ghn-mini-timeline::before,.ghn-mini-timeline::after{top:9px}
+  .ghn-mile-dot{width:20px;height:20px}
+  .ghn-mile.cur .ghn-mile-dot{box-shadow:0 0 0 4px rgba(122,92,255,.15)}
+  .ghn-mile-label{font-size:9.5px;max-width:74px;line-height:1.3}
+  .ghn-events li{padding-left:20px;padding-bottom:14px}
+  .ghn-events::before{left:4px;width:1.5px}
+  .ghn-ev-dot{width:10px;height:10px;left:0;top:5px}
+  .ghn-ev-status{font-size:13px}
+  .ghn-ev-desc{font-size:12px}
+  .ghn-ev-time{font-size:11px}
+}
+@media(max-width:360px){
+  .ghn-mile-label{font-size:8.5px;max-width:60px}
 }
 
