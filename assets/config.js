@@ -16,6 +16,22 @@ window.CONFIG = {
   STORE_NAME: "VOISTUDIO",
   IMAGE_BUCKET: "product-images",
 
+  /* ---------- ẢNH SAO LƯU TRÊN CLOUDINARY (mirror) ----------
+     Mỗi ảnh upload qua admin sẽ được lưu SONG SONG trên Supabase Storage
+     (URL chính, lưu trong DB) VÀ Cloudinary (mirror). Nếu Supabase pause/sự
+     cố, ảnh tự fallback sang Cloudinary ngay trong browser khách (xem hàm
+     STORE.mirrorURL + handler "error" trong store-api.js).
+     Để TRỐNG cả 2 trường ➜ tính năng tự tắt, app chạy như cũ.
+     Cách bật (miễn phí, ~3 phút):
+       1. https://cloudinary.com → Sign up → Dashboard → copy "Cloud name".
+       2. Settings → Upload → Add upload preset → Signing Mode = "Unsigned"
+          → đặt tên preset (ví dụ "voistudio") → Save → copy tên preset.
+       3. (Khuyến nghị) Trong preset bật "Use filename or externally defined Public ID"
+          để mirror dùng đúng tên với Supabase ➜ derive URL không cần lưu thêm.
+  ----------------------------------------------------------- */
+  CLOUDINARY_CLOUD_NAME:    "anhcoming",
+  CLOUDINARY_UPLOAD_PRESET: "voistudio",
+
   /* ---------- GỬI EMAIL XÁC NHẬN ĐƠN HÀNG (EmailJS) ----------
      Để TRỐNG cả 3 trường ➜ tính năng tự tắt (đơn vẫn lưu email khách).
      Cách bật (miễn phí, ~5 phút):

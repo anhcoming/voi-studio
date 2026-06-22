@@ -101,6 +101,42 @@ originals-store/
 - RLS insert chống spoof: khách ẩn danh chỉ đặt được đơn với `user_id = null`; khách đăng nhập chỉ gắn được `user_id` của chính họ.
 - Muốn thêm admin: thêm email vào cả `config.js` và `is_admin()` rồi chạy lại đoạn `is_admin` trong SQL.
 
+## I. Mirror ảnh lên Cloudinary (chống mất ảnh khi Supabase pause)
+
+Supabase free pause project sau ~1 tuần không request → URL ảnh public trả 4xx và "mất ảnh" trên web. Để chống tình huống này, mỗi ảnh admin upload được **lưu song song** lên Cloudinary (mirror). Khi browser khách load ảnh chính (Supabase) lỗi, tự đổi sang URL Cloudinary trong tích tắc — khách không thấy ảnh vỡ.
+
+- **Bật như thế nào:** điền 2 trường `CLOUDINARY_*` trong `assets/config.js`.
+- **Để trống cả 2:** tính năng tự tắt — admin upload chỉ lên Supabase như cũ, không lỗi.
+- **Miễn phí:** Cloudinary free 25 GB storage + 25 GB bandwidth/tháng, không pause project.
+
+### Bước 1 — Tạo tài khoản Cloudinary
+1. https://cloudinary.com → **Sign Up Free**.
+2. Vào **Dashboard** → copy **Cloud name** (dạng `dxxxxxxx`).
+
+### Bước 2 — Tạo Unsigned Upload Preset
+1. **Settings (icon bánh răng) → Upload → Upload presets → Add upload preset**.
+2. Đặt **Signing Mode = Unsigned** (để upload thẳng từ browser admin, không cần backend).
+3. Đặt **Preset name** tuỳ chọn (ví dụ `voistudio`) — đây là chuỗi sẽ dán vào config.
+4. (Khuyến nghị) Trong tab **Storage and access** bật **Use filename or externally defined Public ID** — đảm bảo mirror trùng tên với Supabase để URL mirror derive đúng.
+5. **Save**.
+
+### Bước 3 — Dán vào `assets/config.js`
+```js
+CLOUDINARY_CLOUD_NAME:    "dxxxxxxx",
+CLOUDINARY_UPLOAD_PRESET: "voistudio",
+```
+
+Refresh trang admin → vào edit 1 sản phẩm → upload thử 1 ảnh. Mở Console (F12) nếu thấy log `[mirror] Cloudinary upload failed` thì preset/cloud name sai. Không log = mirror chạy ngon. Vào Cloudinary → Media Library kiểm tra file vừa upload có nằm trong account của bạn không.
+
+### Test fallback
+Tạm pause project Supabase (Settings → General → Pause) → reload trang khách → ảnh vẫn hiện (load mirror Cloudinary thông qua handler `error` trong `assets/store-api.js`). Bấm Restore khi xong.
+
+### Lưu ý
+- Mirror chỉ chạy cho ảnh upload **sau khi bật**. Ảnh đã có trước đó chỉ tồn tại trên Supabase; muốn migrate ngược về Cloudinary phải tự download + upload lại qua dashboard.
+- Cloud name + upload preset để công khai là **bình thường** — preset unsigned chỉ cho phép upload (không xoá/list), và Cloudinary có thể giới hạn theo domain ở **Settings → Security → Allowed strict referral/Upload referral list**, nhớ whitelist domain web để tránh bị lạm dụng.
+
+---
+
 ## H. Gửi email xác nhận đơn hàng (EmailJS)
 
 Khi khách đặt hàng xong, web tự gửi email xác nhận (mã đơn, sản phẩm, tổng tiền, link tra cứu) về địa chỉ khách nhập trong form checkout.

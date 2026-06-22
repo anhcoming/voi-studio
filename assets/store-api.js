@@ -333,13 +333,21 @@
       write(LS.settings, all);
     },
 
-    /* ============ ẢNH ============ */
+    /* ============ ẢNH ============
+       Primary: Supabase Storage (URL lưu vào DB).
+       Mirror:  Cloudinary (best-effort, không chặn admin). public_id được
+                đặt = đúng path Supabase (bỏ đuôi) ➜ mirrorURL() derive lại
+                được khi cần fallback, không phải lưu thêm cột.
+    */
     async uploadImage(file){
       if(this.cloud){
         const path = Date.now()+"-"+file.name.replace(/[^a-zA-Z0-9.\-_]/g,"_");
-        const {error}=await supa.storage.from(CFG.IMAGE_BUCKET||"product-images").upload(path,file,{upsert:true});
+        const bucket = CFG.IMAGE_BUCKET||"product-images";
+        const {error}=await supa.storage.from(bucket).upload(path,file,{upsert:true});
         if(error) throw error;
-        const {data}=supa.storage.from(CFG.IMAGE_BUCKET||"product-images").getPublicUrl(path);
+        const {data}=supa.storage.from(bucket).getPublicUrl(path);
+        // mirror Cloudinary chạy ngầm — fail không chặn upload chính
+        cloudinaryMirror(file, path).catch(e=>console.warn("[mirror] Cloudinary upload failed:", e?.message||e));
         return data.publicUrl;
       }
       return await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(file); });
@@ -547,4 +555,55 @@
   };
 
   window.DB = DB;
+
+  /* ============ MIRROR ẢNH (Cloudinary) ============
+     URL chính (Supabase) lưu trong DB. URL mirror được DERIVE từ URL chính
+     theo công thức cố định, không cần lưu cột thứ 2:
+       Supabase  : https://<ref>.supabase.co/storage/v1/object/public/<bucket>/<path>
+       Cloudinary: https://res.cloudinary.com/<cloud>/image/upload/f_auto,q_auto/<path-bỏ-đuôi>
+  */
+  async function cloudinaryMirror(file, supabasePath){
+    const cn = CFG.CLOUDINARY_CLOUD_NAME, up = CFG.CLOUDINARY_UPLOAD_PRESET;
+    if(!cn || !up) return;        // chưa cấu hình → bỏ qua, app chạy như cũ
+    const publicId = supabasePath.replace(/\.[^.]+$/, "");
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("upload_preset", up);
+    fd.append("public_id", publicId);
+    const r = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cn)}/image/upload`, {method:"POST", body:fd});
+    if(!r.ok) throw new Error("Cloudinary HTTP " + r.status);
+  }
+
+  function mirrorURL(url){
+    if(!url || typeof url !== "string") return null;
+    const cn = CFG.CLOUDINARY_CLOUD_NAME;
+    if(!cn) return null;
+    const bucket = CFG.IMAGE_BUCKET || "product-images";
+    // bắt path sau /public/<bucket>/
+    const marker = "/storage/v1/object/public/" + bucket + "/";
+    const i = url.indexOf(marker);
+    if(i < 0) return null;
+    const path = url.slice(i + marker.length).split("?")[0];
+    if(!path) return null;
+    const publicId = path.replace(/\.[^.]+$/, "");
+    return `https://res.cloudinary.com/${encodeURIComponent(cn)}/image/upload/f_auto,q_auto/${publicId}`;
+  }
+
+  // expose để admin/app gọi nếu cần
+  if(window.STORE) window.STORE.mirrorURL = mirrorURL;
+
+  /* ---- AUTO-FALLBACK ----
+     Bắt sự kiện "error" ở capture phase: img nào load lỗi & src thuộc
+     Supabase storage thì tự đổi sang URL Cloudinary. data-mirrored để tránh
+     loop nếu mirror cũng lỗi (lúc đó để SVG/alt hiển thị bình thường). */
+  document.addEventListener("error", function(e){
+    const el = e.target;
+    if(!el || el.tagName !== "IMG") return;
+    if(el.dataset.mirrored) return;
+    const m = mirrorURL(el.src);
+    if(m && m !== el.src){
+      el.dataset.mirrored = "1";
+      el.src = m;
+    }
+  }, true);
 })();

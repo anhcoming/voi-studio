@@ -713,7 +713,11 @@ function renderFooter(){
 
 /* ---------------- TRANG CHỦ ---------------- */
 // Trả về cards thật nếu có; trả skeleton khi Catalog đang load (data từ API chưa về).
-function cardsOrSkeleton(products, n=6){
+function cardsOrSkeleton(products /*, n*/){
+  return (products||[]).map(productCard).join("");
+}
+// (Stub giữ tương thích lời gọi cũ; skeleton đã bỏ — boot dùng showAppLoader)
+function _unused_cardsOrSkeletonOld(products, n=6){
   if(products && products.length) return products.map(productCard).join("");
   return Catalog.loaded ? "" : Array.from({length:n}, skCard).join("");
 }
@@ -1024,21 +1028,9 @@ async function renderProduct(){
   // Cache miss → fetch trực tiếp DB (tránh trường hợp PRODUCTS chưa load
   // hoặc id trong URL không khớp gì trong cache local)
   if(!p && id){
-    // Skeleton PDP layout — 2 cột: ảnh + info
-    root.innerHTML = `<div class="wrap" style="padding:24px 0">
-      <div class="sk-pdp">
-        <div class="sk sk-pdp-img"></div>
-        <div class="sk-pdp-info">
-          <span class="sk sk-line" style="width:120px;height:12px"></span>
-          <span class="sk sk-line" style="width:80%;height:30px"></span>
-          <span class="sk sk-line" style="width:140px;height:24px"></span>
-          ${Array.from({length:4}, _=>`<span class="sk sk-line" style="width:90%;height:11px"></span>`).join("")}
-          <div style="display:flex;gap:8px;margin-top:14px">${Array.from({length:4}, _=>`<span class="sk sk-block" style="width:48px;height:42px;border-radius:8px"></span>`).join("")}</div>
-          <span class="sk sk-line" style="width:100%;height:48px;border-radius:14px;margin-top:18px"></span>
-        </div>
-      </div>
-    </div>`;
+    showAppLoader();
     try{ p = await DB.getProduct(id); }catch(e){ console.warn("getProduct DB",e); }
+    hideAppLoader();
   }
   if(!p){
     console.warn("renderProduct: không tìm được SP với id=",id,"→ fallback PRODUCTS[0]");
@@ -1846,17 +1838,10 @@ async function renderOrder(){
 
   if(!code){ await lookupView(); return; }
 
-  // Skeleton trang tra cứu đơn
-  root.innerHTML=`<div class="wrap page-head"><span class="sk sk-line" style="width:200px;height:13px;margin-bottom:14px"></span><span class="sk sk-line" style="width:280px;height:34px"></span></div>
-    <div class="wrap" style="max-width:680px;padding-bottom:60px">
-      <span class="sk sk-block" style="display:block;height:160px;border-radius:16px;margin-bottom:24px"></span>
-      ${Array.from({length:2}, _=>`<div class="sk-order-row">
-        <div style="flex:1"><span class="sk sk-line" style="width:140px;height:14px;margin-bottom:8px"></span><span class="sk sk-line" style="width:80%;height:11px"></span></div>
-        <span class="sk sk-block" style="width:100px;height:24px;border-radius:30px"></span>
-      </div>`).join("")}
-    </div>`;
+  showAppLoader();
   let o=null;
   try{ o=await DB.getOrderByCode(code); }catch(e){ console.warn(e); }
+  hideAppLoader();
   if(!o){ await lookupView(`Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Vui lòng kiểm tra lại mã.`); return; }
 
   const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;
@@ -1979,10 +1964,22 @@ const Catalog = { loaded:false, async load(){
   this.loaded=true;
 }};
 
-/* ---------------- SKELETON LOADING ----------------
-   Thay loader cứng bằng skeleton — render layout giả lập trong #page ngay khi
-   boot, để user thấy ngay khung trang thay vì màn trắng. Khi data sẵn sàng,
-   render thật sẽ ghi đè skeleton. */
+/* ---------------- LOADING OVERLAY (đơn giản, transparent + blur) ---------------- */
+function showAppLoader(){
+  if($("#appLoader")) return;
+  const el = document.createElement("div");
+  el.id="appLoader"; el.className="app-loader";
+  el.innerHTML = `<div class="al-logo">${escapeXML(S.BRAND?.name||"VOISTUDIO")}<span class="dot">.</span></div><div class="app-spinner"></div>`;
+  document.body.appendChild(el);
+}
+function hideAppLoader(){
+  const el = $("#appLoader"); if(!el) return;
+  el.classList.add("hide");
+  setTimeout(()=>el.remove(), 400);
+}
+
+/* ---------------- SKELETON (deprecated — giữ để stub helpers nếu có chỗ gọi cũ) ----------------
+   Không dùng cho boot nữa; đã quay lại showAppLoader. */
 const skCard = ()=>`<article class="card sk-card">
   <div class="sk sk-thumb"></div>
   <div class="sk-info">
@@ -2063,30 +2060,22 @@ function initScrollTop(){
 
 /* ---------------- BOOT ---------------- */
 document.addEventListener("DOMContentLoaded", async ()=>{
+  showAppLoader();
   const page = document.body.dataset.page;
-  // Categories/Colors/Home/Auth không phụ thuộc DB sản phẩm — load nhanh, không skeleton
   await Promise.all([Categories.load(), Colors.load(), Home.load(), Auth.init()]);
+  await Catalog.load();
   renderHeader();
   renderFooter();
-  // Render trang ngay với static content; phần grid sản phẩm hiển thị skeleton cho tới khi Catalog.load() xong
   if(page==="home") renderHome();
   if(page==="collection") renderCollection();
   if(page==="product") renderProduct();
   if(page==="cart") renderCart();
   if(page==="order") renderOrder();
-  // Load Catalog (API products) ở background; xong → re-render các trang phụ thuộc danh sách SP
-  Catalog.load().then(()=>{
-    if(page==="home") renderHome();
-    if(page==="collection") renderCollection();
-    // product/cart/order: ảnh & tên SP có thể lookup qua getProduct → cũng re-render
-    if(page==="product" && !S.getProduct(param("id"))) renderProduct();
-    if(page==="cart") renderCart();
-    if(page==="order") renderOrder();
-  });
   Auth.onChange(()=>{
     const pg = document.body.dataset.page;
     if(pg==="order") renderOrder();
     else if(pg==="cart") renderCart();
   });
   initScrollTop();
+  requestAnimationFrame(hideAppLoader);
 });

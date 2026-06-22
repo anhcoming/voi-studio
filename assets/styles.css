@@ -895,7 +895,16 @@ input,textarea,select{font-family:inherit}
 }
 
 /* ---------- Overlay loading (lúc tải dữ liệu) ---------- */
-/* ========== Skeleton loading (thay app-loader cũ) ========== */
+/* ========== Loading overlay — không overlay, chỉ logo+spinner nổi giữa page ========== */
+.app-loader{position:fixed;inset:0;z-index:9999;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;transition:opacity .35s ease,visibility .35s ease;pointer-events:none}
+.app-loader.hide{opacity:0;visibility:hidden;pointer-events:none}
+.app-loader .al-logo{font-family:var(--font-display);font-weight:900;font-size:26px;letter-spacing:-.03em;text-transform:uppercase;color:var(--ink);animation:al-pulse 1.4s ease-in-out infinite;filter:drop-shadow(0 2px 8px rgba(255,255,255,.8))}
+.app-loader .al-logo .dot{color:var(--sale)}
+.app-spinner{width:34px;height:34px;border:3px solid rgba(0,0,0,.12);border-top-color:var(--ink);border-radius:50%;animation:al-spin .7s linear infinite}
+@keyframes al-spin{to{transform:rotate(360deg)}}
+@keyframes al-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+
+/* ========== Skeleton (giữ class cho stub helpers cũ, không dùng cho boot) ========== */
 .sk{background:linear-gradient(90deg,#eee 0%,#f7f7f5 50%,#eee 100%);background-size:200% 100%;animation:sk-shim 1.4s ease-in-out infinite;display:block;border-radius:8px}
 .sk-block{border-radius:8px}
 .sk-line{height:12px;margin-top:8px}
