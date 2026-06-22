@@ -1437,7 +1437,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
   // document.body làm mọi listener trong tab cũ vẫn còn nhưng trỏ vào DOM mới.
   if(window.__adminAuthBound) return;
   window.__adminAuthBound = true;
-  let lastUserId = null;
+  let lastUserId;   // undefined ⇒ lần callback đầu (kể cả khi user=null) luôn chạy boot()
   if(DB.cloud){
     DB.onAuth((u)=>{
       const uid = u?.id || null;
