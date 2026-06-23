@@ -85,25 +85,38 @@ function renderLogin(user){
 
 function renderShell(){
   const modeBadge = DB.cloud
-    ? `<span class="badge-mode badge-cloud">Cloud</span>`
-    : `<span class="badge-mode badge-demo">Demo</span>`;
+    ? `<span class="badge-mode badge-cloud"><span class="badge-dot"></span>Cloud</span>`
+    : `<span class="badge-mode badge-demo"><span class="badge-dot"></span>Demo</span>`;
+  const email = A.user.email || "";
+  const initial = (email || "?").trim().charAt(0).toUpperCase();
   document.body.innerHTML = `
-  <div class="admin-top"><div class="row">
-    <a class="logo" href="../index.html">${S.BRAND.name}<span class="dot">.</span></a>
-    <span style="font-size:13px;color:#cfcfcf">Admin</span> ${modeBadge}
+  <header class="admin-top"><div class="row">
+    <a class="logo" href="../index.html">
+      <span class="logo-name">${S.BRAND.name}<span class="dot">.</span></span>
+      <span class="logo-sub">Admin</span>
+    </a>
+    ${modeBadge}
     <div class="spacer"></div>
-    <span class="who">${esc(A.user.email||"")}</span>
-    <button class="logout" id="logoutBtn">Đăng xuất</button>
-  </div></div>
-  <div class="admin-tabs"><div class="row">
+    <a class="icon-btn view-site" href="../index.html" target="_blank" rel="noopener" title="Mở trang khách" aria-label="Mở trang khách">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3H3v10h10V9"/><path d="M9 2.5h4.5V7"/><path d="M7.5 8.5L13 3"/></svg>
+    </a>
+    <div class="user-chip" title="${esc(email)}">
+      <span class="user-avatar">${esc(initial)}</span>
+      <span class="user-email">${esc(email)}</span>
+    </div>
+    <button class="icon-btn logout" id="logoutBtn" title="Đăng xuất" aria-label="Đăng xuất">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11l3-3-3-3"/><path d="M13 8H6"/><path d="M7 3H3v10h4"/></svg>
+    </button>
+  </div></header>
+  <nav class="admin-tabs"><div class="row">
     <button data-tab="orders">Đơn hàng</button>
     <button data-tab="products">Sản phẩm</button>
     <button data-tab="categories">Danh mục</button>
     <button data-tab="colors">Màu sắc</button>
     <button data-tab="vouchers">Voucher</button>
     <button data-tab="home">Trang chủ</button>
-  </div></div>
-  <div class="admin-wrap" id="adminContent"></div>`;
+  </div></nav>
+  <main class="admin-wrap" id="adminContent"></main>`;
   $("#logoutBtn").onclick=async()=>{
     const ok = await confirmDialog({
       title:"Đăng xuất?",
@@ -1038,6 +1051,129 @@ function _timeAgo(iso){
   return new Date(iso).toLocaleDateString("vi-VN");
 }
 
+/* ---------------- DASHBOARD CHARTS (pure SVG, no lib) ---------------- */
+function _chartRevenueTrend(orders){
+  const DAYS = 14;
+  const W = 720, H = 180;
+  const P = { l: 50, r: 16, t: 16, b: 28 };
+  const innerW = W - P.l - P.r, innerH = H - P.t - P.b;
+  // Day buckets — đẩy hết về 00:00 cho dễ so sánh
+  const today = new Date(); today.setHours(0,0,0,0);
+  const buckets = [];
+  for(let i = DAYS-1; i >= 0; i--){
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    buckets.push({ date: d, sum: 0, count: 0 });
+  }
+  orders.forEach(o => {
+    if(o.status !== "completed") return;
+    const d = new Date(o.created_at); d.setHours(0,0,0,0);
+    const idx = buckets.findIndex(b => b.date.getTime() === d.getTime());
+    if(idx >= 0){ buckets[idx].sum += +o.total || 0; buckets[idx].count++; }
+  });
+  const maxV = Math.max(1, ...buckets.map(b => b.sum));
+  const x = i => P.l + (i / (DAYS-1)) * innerW;
+  const y = v => P.t + innerH - (v / maxV) * innerH;
+  const linePath = buckets.map((b, i) => `${i?'L':'M'}${x(i).toFixed(1)},${y(b.sum).toFixed(1)}`).join(' ');
+  const areaPath = linePath + ` L${x(DAYS-1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
+  const yTicks = [0, Math.round(maxV/2), maxV];
+  const yLabels = yTicks.map(v =>
+    `<text x="${P.l - 6}" y="${y(v) + 3}" text-anchor="end" fill="#999" font-size="10">${money(v)}</text>` +
+    `<line x1="${P.l}" x2="${W-P.r}" y1="${y(v)}" y2="${y(v)}" stroke="#f0f0f0" stroke-width="1"/>`
+  ).join('');
+  const xLabels = buckets.map((b, i) =>
+    (i % 2 === 0)
+      ? `<text x="${x(i)}" y="${H-8}" text-anchor="middle" fill="#999" font-size="10">${b.date.getDate()}/${b.date.getMonth()+1}</text>`
+      : ''
+  ).join('');
+  const dots = buckets.map((b, i) =>
+    b.sum > 0
+      ? `<circle cx="${x(i)}" cy="${y(b.sum)}" r="3.5" fill="#1d9e75" stroke="#fff" stroke-width="2"><title>${b.date.toLocaleDateString('vi-VN')}: ${money(b.sum)} (${b.count} đơn)</title></circle>`
+      : ''
+  ).join('');
+  const total = buckets.reduce((s,b)=>s+b.sum, 0);
+  const totalCount = buckets.reduce((s,b)=>s+b.count, 0);
+  // So sánh với DAYS trước đó để thấy growth
+  const prevTotal = orders.filter(o => {
+    if(o.status !== "completed") return false;
+    const d = new Date(o.created_at);
+    const ago = (today.getTime() - d.getTime()) / 86400000;
+    return ago >= DAYS && ago < DAYS*2;
+  }).reduce((s,o)=>s + (+o.total||0), 0);
+  const growthPct = prevTotal > 0 ? Math.round(((total - prevTotal) / prevTotal) * 100) : null;
+  const growthHtml = growthPct === null
+    ? ''
+    : `<span class="chart-growth ${growthPct>=0?'up':'down'}">${growthPct>=0?'▲':'▼'} ${Math.abs(growthPct)}%</span>`;
+
+  return `
+    <div class="chart-card">
+      <div class="chart-head">
+        <div>
+          <div class="chart-title">Doanh thu ${DAYS} ngày gần nhất</div>
+          <div class="chart-sub">${money(total)} · ${totalCount} đơn hoàn thành ${growthHtml}</div>
+        </div>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" class="chart-svg" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#1d9e75" stop-opacity=".22"/>
+            <stop offset="100%" stop-color="#1d9e75" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        ${yLabels}
+        <path d="${areaPath}" fill="url(#revGrad)"/>
+        <path d="${linePath}" fill="none" stroke="#1d9e75" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        ${dots}
+        ${xLabels}
+      </svg>
+    </div>
+  `;
+}
+
+function _chartStatusDonut(orders){
+  const counts = {};
+  Object.keys(STATUS).forEach(k => counts[k] = 0);
+  orders.forEach(o => { if(counts[o.status] != null) counts[o.status]++; });
+  const total = Object.values(counts).reduce((s,v)=>s+v, 0);
+  if(!total){
+    return `<div class="chart-card chart-card-donut"><div class="chart-title">Phân bổ trạng thái</div><div class="empty-state" style="padding:30px;text-align:center;color:var(--muted)">Chưa có đơn</div></div>`;
+  }
+  const SIZE = 150, R = 56, STROKE = 18;
+  const cx = SIZE/2, cy = SIZE/2;
+  const circ = 2 * Math.PI * R;
+  let offset = 0;
+  const slices = Object.entries(counts).filter(([,v]) => v > 0).map(([k, v]) => {
+    const frac = v / total;
+    const len = frac * circ;
+    const dashArray = `${len.toFixed(2)} ${(circ - len).toFixed(2)}`;
+    const dashOffset = -offset;
+    offset += len;
+    return `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none"
+      stroke="${STATUS_COLOR[k]}" stroke-width="${STROKE}"
+      stroke-dasharray="${dashArray}" stroke-dashoffset="${dashOffset.toFixed(2)}"
+      transform="rotate(-90 ${cx} ${cy})"><title>${STATUS[k]}: ${v}</title></circle>`;
+  }).join('');
+  const legend = Object.entries(counts).map(([k, v]) =>
+    `<div class="donut-legend-item">
+      <span class="donut-dot" style="background:${STATUS_COLOR[k]}"></span>
+      <span class="donut-legend-label">${STATUS[k]}</span>
+      <span class="donut-legend-val">${v}</span>
+    </div>`
+  ).join('');
+  return `
+    <div class="chart-card chart-card-donut">
+      <div class="chart-title">Phân bổ trạng thái</div>
+      <div class="donut-wrap">
+        <svg viewBox="0 0 ${SIZE} ${SIZE}" class="donut-svg">
+          ${slices}
+          <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="10" fill="#999">Tổng</text>
+          <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="22" font-weight="800" fill="#101010" font-family="var(--font-display)">${total}</text>
+        </svg>
+        <div class="donut-legend">${legend}</div>
+      </div>
+    </div>
+  `;
+}
+
 async function renderOrders(){
   const c=$("#adminContent");
   c.innerHTML=`<div class="empty-state">Đang tải đơn hàng…</div>`;
@@ -1083,6 +1219,11 @@ function _renderOrdersInner(){
     <div class="admin-actions">
       <button class="mini" id="refreshO">↻ Tải lại</button>
     </div>
+  </div>
+
+  <div class="chart-row">
+    ${_chartRevenueTrend(_orders)}
+    ${_chartStatusDonut(_orders)}
   </div>
 
   <div class="stats stats-grid-6">

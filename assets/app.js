@@ -1319,6 +1319,9 @@ async function renderProduct(){
 /* ---------------- TRANG GIỎ HÀNG (giỏ + form đặt hàng cùng 1 màn) ---------------- */
 async function renderCart(){
   const root=$("#page");
+  // Prefetch list tỉnh GHN ngay khi mở trang giỏ — chạy nền song song với
+  // việc vẽ UI, đến lúc user click "Chọn tỉnh" thì data đã có sẵn.
+  prefetchAddressData();
   // Tải địa chỉ đã lưu (chỉ khi đăng nhập) — async, không chặn render đầu
   const savedAddrsPromise = Auth.isLoggedIn() ? DB.listMyAddresses().catch(()=>[]) : Promise.resolve([]);
   function draw(savedAddrs){
@@ -1720,30 +1723,68 @@ function clearCheckoutDraft(){ try{ localStorage.removeItem(CHECKOUT_DRAFT_KEY);
 /* Shopee-style address picker — 3 dropdown cascade (Tỉnh → Huyện → Xã) + ô số nhà/đường.
    Data: GHN master-data API qua edge function `ghn-proxy?action=master`.
    Mã địa chỉ trong đơn = GHN IDs trực tiếp → không cần resolve name → ID
-   khi push lên GHN nữa (xóa case "không đủ Tỉnh/Huyện/Xã"). */
+   khi push lên GHN nữa.
+   ---
+   PERF: cache 24h trong localStorage. List tỉnh/huyện/xã GHN gần như cố
+   định (đổi vài lần/năm), không cần fetch mỗi lần mở picker. Lần 2 mở
+   checkout = đọc local = instant, không tốn 1-3s cold-start edge function. */
 const _addrCache = { provinces: null, district: {}, ward: {} };
+const ADDR_CACHE_TTL = 24 * 60 * 60 * 1000;   // 24h
 // Map raw GHN row → {code, name} cho picker UI
 const ghnProvinceItem = r => ({ code: String(r.ProvinceID), name: r.ProvinceName });
 const ghnDistrictItem = r => ({ code: String(r.DistrictID), name: r.DistrictName });
 const ghnWardItem     = r => ({ code: String(r.WardCode),   name: r.WardName });
 
+function _addrLsGet(key){
+  try{
+    const raw = localStorage.getItem(key);
+    if(!raw) return null;
+    const {ts, data} = JSON.parse(raw);
+    if(Date.now() - ts > ADDR_CACHE_TTL) return null;
+    return data;
+  }catch(e){ return null; }
+}
+function _addrLsSet(key, data){
+  try{ localStorage.setItem(key, JSON.stringify({ts: Date.now(), data})); }catch(e){}
+}
+
 async function fetchProvinces(){
   if(_addrCache.provinces) return _addrCache.provinces;
+  const cached = _addrLsGet("ghn_provinces_v1");
+  if(cached){ _addrCache.provinces = cached; return cached; }
   const rows = await GHN.master("province");
-  _addrCache.provinces = (Array.isArray(rows)?rows:[]).map(ghnProvinceItem);
-  return _addrCache.provinces;
+  const list = (Array.isArray(rows)?rows:[]).map(ghnProvinceItem);
+  _addrCache.provinces = list;
+  _addrLsSet("ghn_provinces_v1", list);
+  return list;
 }
 async function fetchDistricts(provinceCode){
   if(_addrCache.district[provinceCode]) return _addrCache.district[provinceCode];
+  const key = `ghn_districts_v1_${provinceCode}`;
+  const cached = _addrLsGet(key);
+  if(cached){ _addrCache.district[provinceCode] = cached; return cached; }
   const rows = await GHN.master("district", { province_id: +provinceCode });
-  _addrCache.district[provinceCode] = (Array.isArray(rows)?rows:[]).map(ghnDistrictItem);
-  return _addrCache.district[provinceCode];
+  const list = (Array.isArray(rows)?rows:[]).map(ghnDistrictItem);
+  _addrCache.district[provinceCode] = list;
+  _addrLsSet(key, list);
+  return list;
 }
 async function fetchWards(districtCode){
   if(_addrCache.ward[districtCode]) return _addrCache.ward[districtCode];
+  const key = `ghn_wards_v1_${districtCode}`;
+  const cached = _addrLsGet(key);
+  if(cached){ _addrCache.ward[districtCode] = cached; return cached; }
   const rows = await GHN.master("ward", { district_id: +districtCode });
-  _addrCache.ward[districtCode] = (Array.isArray(rows)?rows:[]).map(ghnWardItem);
-  return _addrCache.ward[districtCode];
+  const list = (Array.isArray(rows)?rows:[]).map(ghnWardItem);
+  _addrCache.ward[districtCode] = list;
+  _addrLsSet(key, list);
+  return list;
+}
+
+/* Prefetch list tỉnh khi mở checkout (background, không đợi). Khi user click
+   "Chọn tỉnh/thành" thì data đã sẵn → modal mở instant. */
+function prefetchAddressData(){
+  fetchProvinces().catch(()=>{});
 }
 function openAddrPicker(title, list, onSelect){
   const ov = document.createElement("div");
