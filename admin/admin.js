@@ -29,9 +29,21 @@ function thumb(p){
   if(p.image_url) return `<img src="${esc(p.image_url)}" alt="">`;
   return S.productSVG(p,{seed:0});
 }
-function toast(msg){
-  let t=$(".toast"); if(!t){t=document.createElement("div");t.className="toast";document.body.appendChild(t);}
-  t.textContent="✓ "+msg; requestAnimationFrame(()=>t.classList.add("show"));
+function toast(msg, type){
+  const text = (msg==null ? "" : String(msg));
+  if(!type){
+    if(/(^|\s)lỗi\b|^err|fail|không\s+(tìm\s+được|đủ|hợp\s+lệ|tồn\s+tại)/i.test(text)) type = "error";
+    else if(/^(đã |cảm ơn|áp dụng|thành công|đăng (nhập|xuất))/i.test(text)) type = "success";
+    else if(/^(chỉ còn|hãy |vui lòng|cần |thiếu|hết hàng|sắp hết)/i.test(text)) type = "warn";
+    else type = "info";
+  }
+  const icons = { success:"✓", error:"✕", warn:"!", info:"i" };
+  let t=$(".toast"); if(!t){t=document.createElement("div");document.body.appendChild(t);}
+  t.className = "toast t-" + type;
+  t.innerHTML = `<span class="t-icon" aria-hidden="true"></span><span class="t-msg"></span>`;
+  t.querySelector(".t-icon").textContent = icons[type] || "•";
+  t.querySelector(".t-msg").textContent  = text;
+  requestAnimationFrame(()=>t.classList.add("show"));
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2200);
 }
 

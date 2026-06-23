@@ -223,11 +223,24 @@ function updateCartCount(){ $$(".cart-count").forEach(e => e.textContent = Cart.
 })();
 
 /* ---------------- TOAST ---------------- */
+// toast(msg) → tự detect status từ nội dung message.
+// toast(msg, "success"|"error"|"warn"|"info") → ép kiểu status.
 let toastT;
-function toast(msg){
+function toast(msg, type){
+  const text = (msg==null ? "" : String(msg));
+  if(!type){
+    if(/(^|\s)lỗi\b|^err|fail|không\s+(tìm\s+được|đủ|hợp\s+lệ|tồn\s+tại)/i.test(text)) type = "error";
+    else if(/^(đã |cảm ơn|áp dụng|thành công|đặt hàng thành công|đăng (nhập|xuất))/i.test(text)) type = "success";
+    else if(/^(chỉ còn|hãy |vui lòng|cần |thiếu|hết hàng|sắp hết)/i.test(text)) type = "warn";
+    else type = "info";
+  }
+  const icons = { success:"✓", error:"✕", warn:"!", info:"i" };
   let t = $(".toast");
-  if(!t){ t = document.createElement("div"); t.className="toast"; document.body.appendChild(t); }
-  t.textContent = "✓ " + ((msg==null?"":String(msg)));
+  if(!t){ t = document.createElement("div"); document.body.appendChild(t); }
+  t.className = "toast t-" + type;
+  t.innerHTML = `<span class="t-icon" aria-hidden="true"></span><span class="t-msg"></span>`;
+  t.querySelector(".t-icon").textContent = icons[type] || "•";
+  t.querySelector(".t-msg").textContent  = text;
   requestAnimationFrame(()=> t.classList.add("show"));
   clearTimeout(toastT);
   toastT = setTimeout(()=> t.classList.remove("show"), 2200);
@@ -1675,6 +1688,11 @@ async function renderCart(){
         ]);
         if(result && result.sent) sessionStorage.setItem("ck_email_sent_"+saved.code, email);
         else if(result && !["disabled","no-email"].includes(result.reason)) console.warn("[Email] không gửi được, reason:", result.reason, result.error);
+        // Cache đơn vừa đặt trong sessionStorage để trang order.html show ngay
+        // mà KHÔNG phải gọi RPC (RPC yêu cầu phone tail cho khách ẩn danh).
+        // Khi user mở lại tab khác hoặc sau khi đóng tab, cache hết → vào lại
+        // sẽ qua flow tra cứu bằng SĐT + mã đơn như bình thường.
+        try{ sessionStorage.setItem("just_placed_"+saved.code, JSON.stringify(saved)); }catch(e){}
         location.href="order.html?code="+encodeURIComponent(saved.code)+"&new=1";
       }catch(err){
         console.error(err); btn.disabled=false; btn.textContent="Đặt hàng (COD)";
@@ -2033,42 +2051,41 @@ async function renderOrder(){
     <div class="wrap" style="max-width:680px;padding-bottom:60px">
       ${msg?`<div class="notice err">${msg}</div>`:""}
       ${accountBlock}
-      <h3 style="font-family:var(--font-display);text-transform:uppercase;font-size:16px;margin:28px 0 12px">Tra cứu bằng mã đơn</h3>
-      <p class="muted" style="margin-bottom:12px;font-size:13.5px">Dùng cho đơn đặt khi chưa đăng nhập (đã in trên màn hình sau khi đặt).</p>
-      <form id="lookup" class="subscribe" style="max-width:none;margin:0 0 24px;align-items:flex-start">
-        <div class="fld" style="flex:1;margin:0"><input id="codeInput" placeholder="Nhập mã đơn, ví dụ OR1A2B3" required></div>
+      <h3 style="font-family:var(--font-display);text-transform:uppercase;font-size:16px;margin:28px 0 12px">Tra cứu đơn hàng</h3>
+      <p class="muted" style="margin-bottom:14px;font-size:13.5px">Nhập mã đơn + số điện thoại đã đặt đơn.</p>
+      <form id="lookup" style="margin:0 0 24px;display:flex;flex-direction:column;gap:10px;max-width:420px">
+        <div class="fld" style="margin:0"><input id="codeInput" value="${escapeXML(code||"")}" placeholder="Mã đơn (vd OR1A2B3)" required style="text-transform:uppercase"></div>
+        ${!Auth.isLoggedIn()?`<div class="fld" style="margin:0"><input id="phoneInput" placeholder="Số điện thoại đã đặt đơn" inputmode="tel" required></div>`:""}
         <button class="btn btn-dark" type="submit">Tra cứu</button>
       </form>
       ${recentBlock}
     </div>`;
-    // SECURITY: khách ẩn danh phải nhập SĐT cuối 4 số để xem đơn (chống brute order code)
-    // Khách đã login thì RPC dùng auth.uid() — không bắt phone.
     const needsPhone = !Auth.isLoggedIn();
-    if(needsPhone){
-      const form = $("#lookup");
-      const phoneFld = document.createElement("div");
-      phoneFld.className = "fld";
-      phoneFld.style.cssText = "flex:1;margin:0";
-      phoneFld.innerHTML = `<input id="phoneInput" placeholder="4 số cuối SĐT đã đặt đơn" inputmode="numeric" maxlength="4" required>`;
-      const btn = form.querySelector("button[type=submit]");
-      form.insertBefore(phoneFld, btn);
-    }
-    $("#lookup").onsubmit=e=>{
+    $("#lookup").onsubmit=async e=>{
       e.preventDefault();
       const btn=e.target.querySelector("button[type=submit]");
       if(btn && btn.disabled) return;
-      const inp=$("#codeInput"), c=inp.value.trim();
+      const inp=$("#codeInput"), c=inp.value.trim().toUpperCase();
       if(!c){ setFieldError(inp, "Vui lòng nhập mã đơn"); inp.focus(); return; }
       setFieldError(inp,"");
-      let url = "order.html?code="+encodeURIComponent(c);
+      let phone = "";
       if(needsPhone){
-        const pinp = $("#phoneInput");
-        const tail = (pinp.value||"").replace(/\D/g,"").slice(-4);
-        if(tail.length < 4){ setFieldError(pinp, "Nhập đủ 4 số cuối SĐT"); pinp.focus(); return; }
-        url += "&t="+encodeURIComponent(tail);
+        const pinp=$("#phoneInput");
+        phone = (pinp.value||"").replace(/\D/g,"");
+        if(phone.length < 4){ setFieldError(pinp, "Vui lòng nhập số điện thoại"); pinp.focus(); return; }
+        setFieldError(pinp,"");
       }
-      if(btn){ btn.disabled=true; btn.textContent="Đang chuyển…"; }
-      location.href=url;
+      if(btn){ btn.disabled=true; btn.textContent="Đang tìm…"; }
+      let found=null;
+      try{ found = await DB.getOrderByCode(c, phone); }catch(err){ console.warn(err); }
+      if(!found){
+        if(btn){ btn.disabled=false; btn.textContent="Tra cứu"; }
+        setFieldError(needsPhone?$("#phoneInput"):inp, "Không tìm thấy đơn — kiểm tra lại mã & SĐT");
+        return;
+      }
+      // Cache đơn → reload trang cùng URL → renderOrder đọc từ cache → render instant.
+      try{ sessionStorage.setItem("just_placed_"+found.code, JSON.stringify(found)); }catch(e){}
+      location.href="order.html?code="+encodeURIComponent(found.code);
     };
     const ovl=$("#ovLogin"); if(ovl) ovl.onclick=openLoginModal;
     // Click vào hàng đơn → mở modal chi tiết (không cần fetch lại từ server)
@@ -2080,17 +2097,26 @@ async function renderOrder(){
 
   if(!code){ await lookupView(); return; }
 
-  showAppLoader();
-  let o=null;
-  // Pass phone tail từ URL (?t=1234) cho khách ẩn danh.
-  const phoneTail = (param("t")||"").replace(/\D/g,"").slice(-4);
-  try{ o=await DB.getOrderByCode(code, phoneTail); }catch(e){ console.warn(e); }
-  hideAppLoader();
+  // Ưu tiên cache đơn vừa đặt (cùng session) → khách ẩn danh không bị
+  // bắt nhập SĐT lại ngay sau khi đặt đơn.
+  let o = null;
+  try{
+    const cached = sessionStorage.getItem("just_placed_"+code);
+    if(cached) o = JSON.parse(cached);
+  }catch(e){}
+
   if(!o){
-    const msg = (!Auth.isLoggedIn() && !phoneTail)
-      ? `Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Có thể bạn cần nhập 4 số cuối SĐT.`
-      : `Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Kiểm tra lại mã đơn và 4 số cuối SĐT.`;
-    await lookupView(msg); return;
+    showAppLoader();
+    try{ o = await DB.getOrderByCode(code); }catch(e){ console.warn(e); }
+    hideAppLoader();
+  }
+
+  if(!o){
+    const msg = Auth.isLoggedIn()
+      ? `Đơn <strong>${escapeXML(code)}</strong> không thuộc về tài khoản <b>${escapeXML(Auth.email())}</b>. Đăng xuất nếu cần tra cứu bằng SĐT.`
+      : `Để xem đơn <strong>${escapeXML(code)}</strong>, vui lòng nhập số điện thoại đã dùng đặt đơn.`;
+    await lookupView(msg);
+    return;
   }
 
   const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;

@@ -313,23 +313,25 @@ begin
   v_user := auth.uid();
   v_tail := regexp_replace(coalesce(p_phone_tail, ''), '\D', '', 'g');
 
-  -- Admin: xem mọi đơn không cần phone
+  -- Admin: xem mọi đơn
   if public.is_admin() then
     return query select * from public.orders
       where code = upper(trim(p_code)) limit 1;
     return;
   end if;
 
-  -- Khách đã login: nếu đơn thuộc về họ, cho xem không cần phone
+  -- Khách đã login: CHỈ xem đơn có user_id match. KHÔNG fallback xuống
+  -- phone check — đảm bảo login user không tra cứu được đơn của người khác
+  -- dù biết SĐT. Đơn cũ trước khi login (user_id=null) cũng không xem được
+  -- ở chế độ login → user phải đăng xuất để dùng SĐT + mã.
   if v_user is not null then
     return query select * from public.orders
       where code = upper(trim(p_code)) and user_id = v_user
       limit 1;
-    if found then return; end if;
+    return;
   end if;
 
-  -- Khách ẩn danh hoặc đơn không thuộc về user đang login:
-  -- bắt buộc khớp 4 số cuối SĐT
+  -- Khách ẩn danh: bắt buộc khớp 4 số cuối SĐT
   if length(v_tail) < 4 then
     return;  -- không có phone tail → từ chối lặng (tránh leak "đơn tồn tại")
   end if;
