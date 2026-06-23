@@ -119,13 +119,46 @@
     mode: MODE, cloud: MODE==="cloud",
 
     /* ============ SẢN PHẨM ============ */
+    // PERF: cache catalog 5 phút trong sessionStorage để chuyển trang sub-100ms.
+    // Skip cache cho adminAll (admin muốn thấy thay đổi ngay). Invalidate khi
+    // upsert/delete sản phẩm hoặc khi đặt đơn (stock thay đổi). Bumped khi đổi schema.
+    _catalogCacheKey: "cache:products:v2",
+    _catalogTTL: 5 * 60 * 1000,
+    _catalogMemo: null,
+    _invalidateCatalog(){
+      this._catalogMemo = null;
+      try{ sessionStorage.removeItem(this._catalogCacheKey); }catch(e){}
+    },
     async listProducts({adminAll=false}={}){
       if(this.cloud){
+        if(!adminAll){
+          // 1) Hot path: in-memory memo trong cùng tab navigation
+          if(this._catalogMemo && Date.now()-this._catalogMemo.ts < this._catalogTTL){
+            return this._catalogMemo.data;
+          }
+          // 2) Warm path: sessionStorage (survive page reload trong cùng tab)
+          try{
+            const cached = sessionStorage.getItem(this._catalogCacheKey);
+            if(cached){
+              const {data, ts} = JSON.parse(cached);
+              if(Date.now()-ts < this._catalogTTL){
+                this._catalogMemo = {data, ts};
+                return data;
+              }
+            }
+          }catch(e){}
+        }
         let q = supa.from("products").select("*").order("sort",{ascending:true}).order("created_at",{ascending:false});
         if(!adminAll) q = q.eq("active", true);
         const {data,error} = await q;
         if(error){ console.warn("listProducts", error.message); return []; }
-        return (data||[]).map(mapProduct);
+        const mapped = (data||[]).map(mapProduct);
+        if(!adminAll){
+          const entry = {data: mapped, ts: Date.now()};
+          this._catalogMemo = entry;
+          try{ sessionStorage.setItem(this._catalogCacheKey, JSON.stringify(entry)); }catch(e){}
+        }
+        return mapped;
       }
       let arr = read(LS.products, null);
       if(!arr) arr = seedLocal();
@@ -134,6 +167,9 @@
     },
     async getProduct(id){
       if(this.cloud){
+        // Tránh gọi DB với id không phải UUID (vd slug demo data) → Postgres
+        // throw "invalid input syntax for type uuid" log noise.
+        if(!isUUID(id)) return null;
         const {data} = await supa.from("products").select("*").eq("id",id).maybeSingle();
         return data? mapProduct(data) : null;
       }
@@ -157,7 +193,9 @@
           delete attempt[hit];
           ({data,error} = await supa.from("products").upsert(attempt).select().single());
         }
-        if(error) throw error; return mapProduct(data);
+        if(error) throw error;
+        this._invalidateCatalog();
+        return mapProduct(data);
       }
       const arr = read(LS.products, []);
       const norm = normalize(p);
@@ -166,7 +204,12 @@
       write(LS.products, arr); return norm;
     },
     async deleteProduct(id){
-      if(this.cloud){ const {error}=await supa.from("products").delete().eq("id",id); if(error) throw error; return; }
+      if(this.cloud){
+        const {error}=await supa.from("products").delete().eq("id",id);
+        if(error) throw error;
+        this._invalidateCatalog();
+        return;
+      }
       write(LS.products, read(LS.products,[]).filter(p=>p.id!==id));
     },
     async seedDemo(){
@@ -174,6 +217,7 @@
       if(this.cloud){
         const rows = demo.map((p,i)=>{ const r=toRow(p); delete r.id; r.sort=i; return r; });
         const {error}=await supa.from("products").insert(rows); if(error) throw error;
+        this._invalidateCatalog();
         return rows.length;
       }
       seedLocal(); return demo.length;
@@ -354,71 +398,64 @@
     },
 
     /* ============ ĐƠN HÀNG ============ */
+    // SECURITY: tất cả việc tính giá / trừ stock / consume voucher xảy ra
+    // trong RPC `create_order` (security definer) — client KHÔNG được tin
+    // để gửi subtotal/total/voucher_discount nữa. Xem migration-security-hardening.sql.
     async createOrder(o){
-      const code = genCode();
-      // Chỉ gắn user_id khi Supabase XÁC NHẬN session còn sống. Nếu localStorage
-      // còn JWT cũ nhưng auth server không nhận, getUser() trả lỗi → ta coi như guest.
-      let validUserId = null;
       if(this.cloud){
-        try{
-          const r = await supa.auth.getUser();
-          if(!r.error && r.data?.user?.id) validUserId = r.data.user.id;
-          else if(r.error) console.warn("[Order] session không hợp lệ:", r.error.message);
-        }catch(e){ console.warn("[Order] auth.getUser threw:", e); }
-      } else {
-        const u = await this.getUser(); validUserId = u?.id || null;
+        // Filter: chỉ chấp nhận item có UUID id thật. Slug ID (từ demo data
+        // data.js) sẽ làm RPC throw "invalid input syntax for type uuid".
+        const allItems = o.items || [];
+        const itemsIn = allItems
+          .filter(it => isUUID(it.id))
+          .map(it => ({
+            id:    it.id,
+            qty:   +it.qty || 0,
+            color: it.color || null,
+            size:  it.size  || null,
+          }));
+        if(itemsIn.length === 0){
+          throw new Error("Giỏ hàng chứa sản phẩm không hợp lệ (demo data cũ?). Vui lòng xoá giỏ và chọn lại sản phẩm.");
+        }
+        if(itemsIn.length < allItems.length){
+          console.warn("[Order] bỏ qua", allItems.length - itemsIn.length, "item không phải UUID (demo data?)");
+        }
+        const {data, error} = await supa.rpc("create_order", {
+          p_items:         itemsIn,
+          p_customer_name: o.customer_name || "",
+          p_phone:         o.phone || "",
+          p_email:         (o.email||"").trim().toLowerCase() || null,
+          p_address:       o.address || "",
+          p_note:          o.note || "",
+          p_province_code: o.province_code || null,
+          p_province_name: o.province_name || null,
+          p_district_code: o.district_code || null,
+          p_district_name: o.district_name || null,
+          p_ward_code:     o.ward_code || null,
+          p_ward_name:     o.ward_name || null,
+          p_street:        o.street || null,
+          p_shipping:      +o.shipping || 0,
+          p_voucher_code:  o.voucher_code || null,
+        });
+        if(error) throw new Error(error.message || "Không tạo được đơn");
+        if(!data) throw new Error("Không nhận được phản hồi từ server");
+        this._invalidateCatalog();   // stock vừa đổi → bust cache cho trang sau
+        // RPC trả jsonb = full row. Đảm bảo có id (= code) cho code cũ.
+        return { ...data, id: data.id || data.code };
       }
+      // ----- LOCAL DEMO MODE -----
+      const code = genCode();
+      const u = await this.getUser();
       const row = { code, status:"pending", customer_name:o.customer_name, phone:o.phone,
         email:(o.email||"").trim().toLowerCase()||null,
         address:o.address, note:o.note||"", items:o.items, subtotal:o.subtotal,
         shipping:o.shipping, total:o.total,
-        // Structured address (mới — cho shipping API/báo cáo). Fallback null nếu thiếu.
         province_code:o.province_code||null, province_name:o.province_name||null,
         district_code:o.district_code||null, district_name:o.district_name||null,
         ward_code:o.ward_code||null,         ward_name:o.ward_name||null,
-        street:o.street||null };
-      if(validUserId) row.user_id = validUserId;  // không gắn nếu null → tránh xung đột default
-      console.info("[Order] inserting:", {code, user_id: validUserId, mode: this.cloud?"cloud":"local"});
-      if(this.cloud){
-        // KHÔNG dùng .select() sau insert: PostgREST sẽ chạy SELECT policy lên row
-        // vừa insert; với khách (anon) thì cả 2 policy SELECT (is_admin, user_id=auth.uid)
-        // đều fail → 42501. Vì `code` đã tự sinh ở client nên không cần đọc lại.
-        let {error}=await supa.from("orders").insert(row);
-        // Fallback 1: chưa chạy migration thêm cột email → insert lại không có email.
-        // PostgREST message: "Could not find the 'X' column of 'Y'..."
-        const missingCol = (msg)=>{
-          if(!msg) return null;
-          // Bắt cả 2 dạng: "column 'X'" (Postgres) và "Could not find the 'X' column" (PostgREST)
-          const m1 = /column[^a-z_]*['"]?([a-z_]+)['"]?/i.exec(msg);
-          const m2 = /['"]([a-z_]+)['"]\s+column/i.exec(msg);
-          return (m1 && m1[1]) || (m2 && m2[1]) || null;
-        };
-        const isMissingCol = (msg, name)=>{
-          const m = missingCol(msg);
-          return m && m.toLowerCase()===name.toLowerCase();
-        };
-        if(error && isMissingCol(error.message, "email")){
-          const {email, ...rest}=row;
-          ({error}=await supa.from("orders").insert(rest));
-        }
-        // Fallback 1b: chưa chạy migration structured address → drop các cột mới
-        const STRUCTURED_COLS = ["province_code","province_name","district_code","district_name","ward_code","ward_name","street"];
-        if(error && STRUCTURED_COLS.some(c=>isMissingCol(error.message, c))){
-          const rest = {...row};
-          STRUCTURED_COLS.forEach(c=> delete rest[c]);
-          ({error}=await supa.from("orders").insert(rest));
-        }
-        // Fallback 2: RLS reject vì session lệch → bỏ user_id, đặt như guest
-        if(error && /row-level security|violates.*policy/i.test(error.message||"") && row.user_id){
-          console.warn("[Order] RLS reject với user_id, thử lại như guest (không gắn user_id)");
-          const {user_id, ...guestRow}=row;
-          ({error}=await supa.from("orders").insert(guestRow));
-        }
-        if(error) throw error;
-        await this.adjustStock(o.items,-1);
-        // Dựng lại row ở client (id thật của DB ta không cần — dùng code làm khoá)
-        return {...row, id:code, created_at:new Date().toISOString()};
-      }
+        street:o.street||null,
+        voucher_code: o.voucher_code||null, voucher_discount: o.voucher_discount||0,
+        user_id: u?.id || null };
       const arr = read(LS.orders, []);
       const full = {...row, id:code, created_at:new Date().toISOString()};
       arr.push(full); write(LS.orders, arr);
@@ -437,10 +474,14 @@
       const arr=read(LS.orders,[]).slice().sort((a,b)=>(a.created_at<b.created_at?1:-1));
       return arr.filter(o=>o.user_id===user.id);
     },
-    async getOrderByCode(code){
+    // SECURITY: khách ẩn danh phải cung cấp 4 số cuối SĐT để xem đơn,
+    // tránh brute-force order code rồi đọc thông tin PII (tên, đ.thoại, đ.chỉ).
+    // Khách đã login đọc được đơn của mình mà không cần phone.
+    async getOrderByCode(code, phoneTail){
       code = (code||"").trim().toUpperCase();
       if(this.cloud){
-        const {data,error}=await supa.rpc("get_order_by_code",{p_code:code});
+        const tail = (phoneTail||"").replace(/\D/g,"").slice(-4);
+        const {data,error}=await supa.rpc("get_order_by_code",{p_code:code, p_phone_tail: tail || null});
         if(error){ console.warn(error.message); return null; }
         return (data&&data[0])||null;
       }
@@ -453,6 +494,57 @@
       const {data,error}=await supa.rpc("get_tracking_by_code",{p_code:code});
       if(error){ console.warn("getTracking", error.message); return []; }
       return data||[];
+    },
+
+    /* ============ VOUCHERS ============ */
+    /* Khách check mã giảm giá. Trả object {valid, message, discount, code, type, voucher_id}. */
+    async checkVoucher(code, subtotal){
+      if(!this.cloud){
+        // Local demo — chấp nhận mọi mã, giảm 10%
+        const d = Math.floor((subtotal||0) * 0.1);
+        return { valid:true, message:"Demo: giảm 10%", code:(code||"").toUpperCase(), type:"percent", discount:d };
+      }
+      const {data,error}=await supa.rpc("check_voucher",{ p_code:code, p_subtotal:subtotal });
+      if(error){ return { valid:false, message: error.message }; }
+      return data || { valid:false, message:"Lỗi không xác định" };
+    },
+    async consumeVoucher(code){
+      if(!this.cloud) return;
+      try{ await supa.rpc("consume_voucher",{ p_code:code }); }
+      catch(e){ console.warn("consumeVoucher", e.message); }
+    },
+    /* Admin CRUD vouchers */
+    async listVouchers(){
+      if(!this.cloud) return [];
+      const {data,error}=await supa.from("vouchers").select("*").order("created_at",{ascending:false});
+      if(error){ console.warn("listVouchers", error.message); return []; }
+      return data||[];
+    },
+    async saveVoucher(v){
+      if(!this.cloud) return;
+      const row = {
+        code: (v.code||"").trim().toUpperCase(),
+        description: v.description||"",
+        discount_type: v.discount_type,
+        discount_value: +v.discount_value||0,
+        min_order: +v.min_order||0,
+        max_discount: v.max_discount?+v.max_discount:null,
+        max_uses: v.max_uses?+v.max_uses:null,
+        starts_at: v.starts_at||null,
+        expires_at: v.expires_at||null,
+        active: v.active!==false,
+      };
+      if(v.id){
+        const {data,error}=await supa.from("vouchers").update(row).eq("id",v.id).select().single();
+        if(error) throw error; return data;
+      }
+      const {data,error}=await supa.from("vouchers").insert(row).select().single();
+      if(error) throw error; return data;
+    },
+    async deleteVoucher(id){
+      if(!this.cloud) return;
+      const {error}=await supa.from("vouchers").delete().eq("id",id);
+      if(error) throw error;
     },
     async listOrders({status=""}={}){
       if(this.cloud){
@@ -482,6 +574,7 @@
               if(data) await supa.from("products").update({stock:Math.max(0,(data.stock||0)+dir*it.qty)}).eq("id",it.id);
             }
           }
+          this._invalidateCatalog();
         } else {
           const arr=read(LS.products,[]);
           items.forEach(it=>{ const p=arr.find(x=>x.id===it.id); if(p) p.stock=Math.max(0,(p.stock||0)+dir*it.qty); });
@@ -491,30 +584,44 @@
     },
 
     /* ============ ĐĂNG NHẬP ADMIN ============ */
-    // Danh sách admin: đọc từ bảng admin_emails (1 nguồn duy nhất).
-    // CONFIG.ADMIN_EMAILS chỉ dùng làm fallback nếu bảng/RPC chưa có.
-    _adminEmails: null,
-    async _loadAdminEmails(){
-      if(this._adminEmails) return this._adminEmails;
-      const fallback = (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase());
-      if(!this.cloud){ this._adminEmails = fallback; return this._adminEmails; }
-      try{
-        const {data, error} = await supa.rpc("list_admin_emails");
-        if(error || !data || !data.length){ this._adminEmails = fallback; }
-        else this._adminEmails = data.map(e=> (typeof e==="string"?e:e.email||"").toLowerCase()).filter(Boolean);
-      }catch(e){ this._adminEmails = fallback; }
-      return this._adminEmails;
-    },
+    // SECURITY: trước đây client gọi list_admin_emails() → trả về toàn bộ
+    // danh sách admin email (public) → attacker biết target để phishing.
+    // Giờ dùng RPC am_i_admin() chỉ trả về true/false cho user hiện tại.
+    // CONFIG.ADMIN_EMAILS chỉ còn dùng làm fallback ở chế độ local demo.
+    _amAdminCache: null,        // null = chưa biết, true/false = đã check
+    _amAdminPromise: null,      // chống gọi RPC song song
     async isAdminAsync(user){
       if(!user) return false;
-      const list = await this._loadAdminEmails();
-      return list.includes((user.email||"").toLowerCase());
+      if(!this.cloud){
+        return (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase())
+          .includes((user.email||"").toLowerCase());
+      }
+      if(this._amAdminCache !== null) return this._amAdminCache;
+      if(this._amAdminPromise) return this._amAdminPromise;
+      this._amAdminPromise = (async()=>{
+        try{
+          const {data, error} = await supa.rpc("am_i_admin");
+          if(error){
+            console.warn("am_i_admin error:", error.message);
+            // Fallback: nếu RPC chưa được deploy, dùng CONFIG.ADMIN_EMAILS
+            return (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase())
+              .includes((user.email||"").toLowerCase());
+          }
+          return !!data;
+        }catch(e){ return false; }
+      })();
+      this._amAdminCache = await this._amAdminPromise;
+      this._amAdminPromise = null;
+      return this._amAdminCache;
     },
-    // Sync wrapper giữ tương thích: dùng cache nếu có, fallback CONFIG.
+    // Sync wrapper giữ tương thích: chỉ dùng được sau khi isAdminAsync đã chạy.
     isAdmin(user){
       if(!user) return false;
-      const list = this._adminEmails || (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase());
-      return list.includes((user.email||"").toLowerCase());
+      if(this._amAdminCache !== null) return this._amAdminCache;
+      // Chưa có cache → fallback CONFIG (tránh false positive khi cache miss
+      // ở lần đầu render; component nên gọi isAdminAsync trước).
+      return (CFG.ADMIN_EMAILS||[]).map(e=>e.toLowerCase())
+        .includes((user.email||"").toLowerCase());
     },
     async getUser(){
       if(this.cloud){
@@ -530,7 +637,10 @@
     onAuth(cb){
       if(this.cloud){
         supa.auth.getUser().then(({data})=>cb(data.user||null));
-        supa.auth.onAuthStateChange((_e,s)=>cb(s?.user||null));
+        supa.auth.onAuthStateChange((_e,s)=>{
+          this._amAdminCache = null;   // user đổi → invalidate admin cache
+          cb(s?.user||null);
+        });
       } else { cb(read(LS.admin,null)); }
     },
     async signInGoogle({asAdmin=false}={}){
@@ -557,6 +667,7 @@
       throw new Error("Email không có quyền admin (chế độ demo)");
     },
     async signOut(){
+      this._amAdminCache = null;       // clear admin cache khi đổi user
       if(this.cloud){ await supa.auth.signOut(); return; }
       localStorage.removeItem(LS.admin);
     },

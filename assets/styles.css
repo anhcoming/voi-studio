@@ -5,6 +5,20 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800;900&family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap');
 
+/* ---------- View Transitions cross-document (Chrome 126+, Safari 18+) ----------
+   Browser hỗ trợ sẽ fade mượt giữa các trang reload; browser cũ snap như cũ. */
+@view-transition { navigation: auto; }
+
+::view-transition-old(root),
+::view-transition-new(root){
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(.4, 0, .2, 1);
+}
+
+@media (prefers-reduced-motion: reduce){
+  @view-transition { navigation: none; }
+}
+
 :root{
   --ink:#101010;
   --ink-soft:#3a3a3a;
@@ -354,6 +368,18 @@ input,textarea,select{font-family:inherit}
 .filter-group label{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--ink-soft);padding:6px 0;cursor:pointer;transition:color .12s}
 .filter-group label:hover{color:var(--ink)}
 .filter-group input{accent-color:var(--sale);width:15px;height:15px;flex-shrink:0}
+/* Filter chips: màu + size */
+.filter-colors{display:flex;flex-wrap:wrap;gap:6px}
+.fcolor{display:inline-flex;align-items:center;gap:6px;padding:5px 11px 5px 6px;border:1.5px solid var(--line);border-radius:30px;background:#fff;font-size:12.5px;color:var(--ink-soft);cursor:pointer;font-family:inherit;transition:.15s;line-height:1.2}
+.fcolor:hover{border-color:var(--ink-soft);color:var(--ink)}
+.fcolor.active{border-color:var(--ink);background:var(--ink);color:#fff}
+.fcolor-dot{display:inline-block;width:16px;height:16px;border-radius:50%;border:1px solid rgba(0,0,0,.12);background-clip:padding-box;flex-shrink:0}
+.fcolor.active .fcolor-dot{border-color:rgba(255,255,255,.45)}
+.fcolor-name{white-space:nowrap}
+.filter-sizes{display:flex;flex-wrap:wrap;gap:6px}
+.fsize{min-width:40px;padding:7px 12px;border:1.5px solid var(--line);border-radius:8px;background:#fff;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;font-family:inherit;transition:.15s;text-align:center}
+.fsize:hover{border-color:var(--ink-soft);color:var(--ink)}
+.fsize.active{border-color:var(--ink);background:var(--ink);color:#fff}
 .shop-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;gap:14px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .shop-toolbar .count{font-size:13px;color:var(--muted);font-weight:500}
 .shop-toolbar select{padding:9px 32px 9px 14px;border:1.5px solid var(--line);border-radius:30px;font-family:inherit;font-size:13px;background:#fff;cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='none' stroke='%23101010' stroke-width='1.6' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
@@ -405,7 +431,10 @@ input,textarea,select{font-family:inherit}
 
 /* Popup thêm nhanh (quick add) */
 .qa-modal{max-width:420px}
-.qa-head{display:flex;gap:14px;margin-bottom:6px}
+/* Nút × không nằm trong .modal-title → setupModalUX không move được. Đẩy về
+   top-right để không chiếm 1 hàng đẩy nội dung xuống. */
+.qa-modal > .modal-close{position:absolute;top:14px;right:14px;z-index:2}
+.qa-head{display:flex;gap:14px;margin-bottom:6px;padding-right:40px}
 .qa-thumb{flex:0 0 88px;width:88px;aspect-ratio:4/5;border-radius:10px;overflow:hidden;background:var(--bg-soft);display:block}
 .qa-thumb svg,.qa-thumb .thumb-img{width:100%;height:100%}
 .qa-meta{min-width:0}
@@ -493,6 +522,18 @@ input,textarea,select{font-family:inherit}
 .saved-addr-name b{font-weight:700}
 .saved-addr-line{font-size:12px;color:var(--muted);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .cart-summary .line{display:flex;justify-content:space-between;font-size:13.5px;color:var(--ink-soft);margin-bottom:8px}
+/* Voucher input */
+.ck-voucher{margin:14px 0 4px;padding:12px 0 4px;border-top:1px dashed var(--line)}
+.ck-voucher-input{display:flex;gap:6px}
+.ck-voucher-input input{flex:1;min-width:0;padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13.5px;font-family:inherit;text-transform:uppercase;letter-spacing:.04em;background:#fff}
+.ck-voucher-input input:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 3px rgba(16,16,16,.06)}
+.ck-voucher-input .btn{padding:9px 16px;font-size:12px;border-radius:8px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.ck-voucher-msg{margin-top:8px;font-size:12px;line-height:1.4;color:var(--ink-soft)}
+.ck-voucher-msg.ok{color:#1d9e75;font-weight:600}
+.ck-voucher-msg.err{color:var(--sale);font-weight:600}
+.ck-discount-line{position:relative;color:#1d9e75!important;font-weight:600;padding-right:24px}
+.ck-discount-line .ck-voucher-x{position:absolute;right:0;top:50%;transform:translateY(-50%);width:18px;height:18px;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0;font-family:inherit;transition:color .15s}
+.ck-discount-line .ck-voucher-x:hover{color:var(--sale)}
 .cart-summary .total{display:flex;justify-content:space-between;align-items:baseline;border-top:1px dashed var(--line);padding-top:12px;margin-top:8px;font-weight:700;font-size:14.5px;color:var(--ink-soft)}
 .cart-summary .cart-total-amount{font-family:var(--font-display);font-size:22px;font-weight:900;color:var(--sale);letter-spacing:-.01em}
 @media(max-width:880px){
@@ -629,10 +670,6 @@ input,textarea,select{font-family:inherit}
   position:sticky;top:-30px;z-index:3;
 }
 .modal-title > .modal-close{margin-left:auto}
-@media(max-width:560px){
-  .modal-title{margin:-22px -22px 14px;padding:14px 16px 12px 22px;top:-22px;font-size:16px}
-  .modal-close{width:32px;height:32px;font-size:20px}
-}
 /* Footer dính dưới */
 .modal-foot{position:sticky;bottom:-30px;margin:18px -30px -30px;padding:14px 30px 22px;background:#fff;border-top:1px solid var(--line);z-index:3;box-shadow:0 -3px 12px rgba(0,0,0,.04)}
 .modal-foot > *:not(:last-child){margin-bottom:8px}
@@ -640,10 +677,6 @@ input,textarea,select{font-family:inherit}
    (vì .modal-foot có sticky + margin-bottom cho first child gây lệch). */
 .confirm-modal .confirm-actions{display:flex;gap:10px;margin-top:18px}
 .confirm-modal .confirm-actions .btn{flex:1;min-width:0;padding-left:16px;padding-right:16px}
-@media(max-width:560px){
-  .modal-title{margin:-22px -22px 14px;padding:16px 54px 12px 22px;top:-22px;font-size:16px}
-  .modal-foot{margin:14px -22px -22px;padding:12px 22px 18px;bottom:-22px}
-}
 .fld{display:block;margin-bottom:14px}
 .fld span{display:block;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px;color:var(--ink-soft)}
 .fld input,.fld textarea{width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:14px;resize:vertical;transition:.15s;background:#fff}

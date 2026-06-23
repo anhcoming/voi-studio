@@ -1,6 +1,35 @@
 /* =========================================================
    ORIGINALS — Engine dùng chung cho mọi trang
    ========================================================= */
+
+/* ---------------- SPECULATION RULES (Chrome prerender) ----------------
+   Khi user hover/touch link cùng origin, Chromium prerender full document
+   ở background → click = swap instant, không loader. Browser khác bỏ qua.
+   Exclude /admin (heavy, auth flow), logout/signout URL, và anchor links. */
+(function injectSpeculationRules(){
+  try{
+    if(!HTMLScriptElement.supports || !HTMLScriptElement.supports("speculationrules")) return;
+    if(document.querySelector('script[type="speculationrules"]')) return;
+    const rules = {
+      prerender: [{
+        where: {
+          and: [
+            { href_matches: "/*" },
+            { not: { href_matches: "/admin/*" } },
+            { not: { href_matches: "/*\\?*logout*" } },
+            { not: { selector_matches: "[data-no-prerender]" } },
+          ],
+        },
+        eagerness: "moderate",   // prerender khi hover ~200ms trước click
+      }],
+    };
+    const s = document.createElement("script");
+    s.type = "speculationrules";
+    s.textContent = JSON.stringify(rules);
+    document.head.appendChild(s);
+  }catch(e){ /* ignore — feature detection only */ }
+})();
+
 const S = window.STORE;
 const $  = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
@@ -211,8 +240,9 @@ const Auth = {
   ready: false,
   async init(){
     try{ this.user = await DB.getUser(); }catch(e){ this.user = null; }
-    // Preload danh sách admin để DB.isAdmin() chính xác khi render auth slot
-    try{ if(DB._loadAdminEmails) await DB._loadAdminEmails(); }catch(e){}
+    // Preload trạng thái admin (chỉ trả true/false, không lộ danh sách admin email)
+    // để DB.isAdmin() sync chính xác khi render auth slot.
+    try{ if(this.user && DB.isAdminAsync) await DB.isAdminAsync(this.user); }catch(e){}
     this.ready = true;
     // Lắng nghe state change từ Supabase (cloud) — đăng nhập/đăng xuất ở tab khác
     if(DB.cloud){
@@ -478,6 +508,7 @@ function openQuickAdd(p){
   });
   $$("#qaSizes .qa-size").forEach(b=> b.onclick=()=>{
     Cart.add({id:p.id,name:p.name,price:p.price,color:qaColor,size:b.dataset.s,qty:1});
+    if(window.SEO) SEO.trackAddToCart(p, 1);
     toast("Đã thêm vào giỏ · size "+b.dataset.s);
     close();
   });
@@ -762,6 +793,10 @@ function featureBlock(b){
 
 function renderHome(){
   const root = $("#page");
+  if(window.SEO) SEO.set({
+    title: S.BRAND.tagline || "Be Bold · Be New · Be Original",
+    description: `${S.BRAND.name} — local brand streetwear. ${S.BRAND.tagline||""}`,
+  });
   // Blocks từ Home settings — admin custom, fallback defaults. Products derived
   // tự động theo catKey/collection của từng block.
   const HBlocks = (Home.get().featureBlocks && Home.get().featureBlocks.length) ? Home.get().featureBlocks : Home.defaults.featureBlocks;
@@ -858,12 +893,24 @@ function bindScrollers(){
 /* ---------------- TRANG DANH SÁCH ---------------- */
 function renderCollection(){
   const root=$("#page");
+  if(window.SEO){
+    const q = (param("q")||"").trim();
+    const cat = param("cat") || "";
+    const sale = param("sale")==="1";
+    SEO.set({
+      title: q ? `Tìm: ${q}` : sale ? "Đang giảm giá" : cat ? (S.CATEGORIES.find(c=>c.key===cat)?.name||"Cửa hàng") : "Cửa hàng",
+      description: `Toàn bộ sản phẩm ${S.BRAND.name}: áo thun, ba lỗ, hoodie, polo, túi tote. Lọc theo danh mục, màu, size, mức giá.`,
+    });
+  }
   let activeCat = param("cat") || "";
   let activeCol = param("collection") || "";
   const saleOnly = param("sale")==="1";
   const query = (param("q")||"").trim().toLowerCase();
 
-  const state = { cat:activeCat, cols:activeCol?[activeCol]:[], price:"", sort:"featured", sale:saleOnly, q:query };
+  const initColors = (param("color")||"").split(",").filter(Boolean);
+  const initSizes  = (param("size")||"").split(",").filter(Boolean);
+  const state = { cat:activeCat, cols:activeCol?[activeCol]:[], price:"", sort:"featured", sale:saleOnly, q:query, colors:initColors, sizes:initSizes };
+  const ALL_SIZES = ["S","M","L","XL","2XL","Freesize"];
 
   const title = query ? `Kết quả: "${query}"`
     : saleOnly ? "Đang giảm giá"
@@ -886,11 +933,28 @@ function renderCollection(){
       <div class="filter-group"><h4>Bộ sưu tập</h4>
         ${S.COLLECTIONS.map(c=>`<label><input type="checkbox" name="col" value="${c}" ${state.cols.includes(c)?'checked':''}> ${c}</label>`).join("")}
       </div>
+      <div class="filter-group"><h4>Màu sắc</h4>
+        <div class="filter-colors">
+        ${(S.COLORS||[]).filter(c=>c.active!==false).map(c=>{
+          const checked = state.colors.includes(c.hex);
+          return `<button type="button" class="fcolor${checked?' active':''}" data-c="${escapeXML(c.hex)}" title="${escapeXML(c.name)}" aria-pressed="${checked}">
+            <span class="fcolor-dot" style="background:${safeColor(c.hex)}"></span>
+            <span class="fcolor-name">${escapeXML(c.name)}</span>
+          </button>`;
+        }).join("")}
+        </div>
+      </div>
+      <div class="filter-group"><h4>Size</h4>
+        <div class="filter-sizes">
+        ${ALL_SIZES.map(s=>`<button type="button" class="fsize${state.sizes.includes(s)?' active':''}" data-s="${s}" aria-pressed="${state.sizes.includes(s)}">${s}</button>`).join("")}
+        </div>
+      </div>
       <div class="filter-group"><h4>Mức giá</h4>
         ${[["","Tất cả"],["lt200","Dưới 200.000₫"],["200-300","200.000₫ – 300.000₫"],["gt300","Trên 300.000₫"]]
           .map(([v,l])=>`<label><input type="radio" name="price" value="${v}" ${state.price===v?'checked':''}> ${l}</label>`).join("")}
       </div>
       <div class="filter-group"><label><input type="checkbox" id="saleChk" ${state.sale?'checked':''}> Chỉ hàng giảm giá</label></div>
+      <button type="button" class="btn btn-outline btn-block" id="fclear" style="margin-top:8px;padding:10px">Xoá toàn bộ lọc</button>
     </aside>
     <div>
       <div class="shop-toolbar">
@@ -933,6 +997,8 @@ function renderCollection(){
     }
     if(state.cat)  list = list.filter(p=>p.catKey===state.cat);
     if(state.cols.length) list = list.filter(p=>state.cols.includes(p.collection));
+    if(state.colors.length) list = list.filter(p=>(p.colors||[]).some(c=>state.colors.includes(c)));
+    if(state.sizes.length)  list = list.filter(p=>(p.sizes||[]).some(s=>state.sizes.includes(s)));
     if(state.sale) list = list.filter(p=>p.sale);
     if(state.price==="lt200") list=list.filter(p=>p.price<200000);
     if(state.price==="200-300") list=list.filter(p=>p.price>=200000&&p.price<=300000);
@@ -957,6 +1023,22 @@ function renderCollection(){
   $$('input[name=price]').forEach(r=>r.onchange=e=>{state.price=e.target.value;apply()});
   $("#saleChk").onchange=e=>{state.sale=e.target.checked;apply()};
   $("#sort").onchange=e=>{state.sort=e.target.value;apply()};
+  $$(".fcolor").forEach(b=>b.onclick=()=>{
+    const c=b.dataset.c, on=state.colors.includes(c);
+    state.colors = on ? state.colors.filter(x=>x!==c) : [...state.colors, c];
+    b.classList.toggle("active", !on); b.setAttribute("aria-pressed", String(!on));
+    apply();
+  });
+  $$(".fsize").forEach(b=>b.onclick=()=>{
+    const s=b.dataset.s, on=state.sizes.includes(s);
+    state.sizes = on ? state.sizes.filter(x=>x!==s) : [...state.sizes, s];
+    b.classList.toggle("active", !on); b.setAttribute("aria-pressed", String(!on));
+    apply();
+  });
+  const fclr=$("#fclear"); if(fclr) fclr.onclick=()=>{
+    Object.assign(state, {cat:"",cols:[],colors:[],sizes:[],price:"",sale:false,sort:"featured",q:""});
+    location.href = "collection.html";
+  };
   // mobile filter drawer (trượt từ trái, có backdrop + khoá cuộn nền)
   const fil=$("#filters"), fbd=$("#fbackdrop");
   const openF =()=>{ fil.classList.add("open");  fbd&&fbd.classList.add("show");  document.body.style.overflow="hidden"; };
@@ -1053,8 +1135,10 @@ async function renderProduct(){
   }
   if(!p){
     root.innerHTML = `<div class="wrap" style="padding:80px 0;text-align:center"><h2>Sản phẩm không tồn tại</h2><p class="muted" style="margin-top:8px">Quay về <a href="collection.html" style="text-decoration:underline">danh sách sản phẩm</a></p></div>`;
+    if(window.SEO) SEO.set({ title:"Không tìm thấy sản phẩm", description:"Sản phẩm bạn tìm không còn tồn tại." });
     return;
   }
+  if(window.SEO) SEO.product(p);
   let color = p.colors[0], size = "", qty = 1;
   const off = S.discountPct(p.price,p.compare);
   const soldOut = (p.stock!=null && p.stock<=0);
@@ -1211,6 +1295,7 @@ async function renderProduct(){
     }
     if(p.stock!=null && qty>p.stock){ toast("Chỉ còn "+p.stock+" sản phẩm"); return false; }
     Cart.add({id:p.id,name:p.name,price:p.price,color,size,qty});
+    if(window.SEO) SEO.trackAddToCart(p, qty);
     return true;
   }
   const acBtn=$("#addCart"), bnBtn=$("#buyNow");
@@ -1239,7 +1324,14 @@ async function renderCart(){
     const FLAT_SHIP = 30000;
     const ghnEnabled = !!(window.GHN && window.GHN.enabled);
     let ship = sub>=500000 || sub===0 ? 0 : FLAT_SHIP;
-    let total = sub+ship;
+    // Voucher state: persist trong sessionStorage để chuyển tab / F5 không mất.
+    const _voucher = (function(){
+      try{ const v = JSON.parse(sessionStorage.getItem("ck_voucher")||"null"); return v||{}; }catch(e){ return {}; }
+    })();
+    // Nếu voucher freeship → ship = 0
+    if(_voucher.type === "freeship") ship = 0;
+    let discount = +_voucher.discount || 0;
+    let total = Math.max(0, sub + ship - discount);
     let shipSource = "flat"; // "flat" | "ghn"
     const last = getLastContact() || {};
     const draft = loadCheckoutDraft() || {};
@@ -1346,6 +1438,16 @@ async function renderCart(){
         <div id="ckShipHint" class="line" style="color:var(--sale);font-size:12.5px;${sub<500000?'':'display:none'}">
           ${sub<500000?`Mua thêm ${money(500000-sub)} để được freeship`:``}
         </div>
+        <div class="ck-voucher">
+          <div class="ck-voucher-input">
+            <input type="text" id="ckVoucherCode" placeholder="Mã giảm giá" autocomplete="off" spellcheck="false" value="${escapeXML(_voucher.code||'')}">
+            <button type="button" class="btn btn-outline btn-sm" id="ckVoucherApply">${_voucher.code?'Đổi mã':'Áp dụng'}</button>
+          </div>
+          <div id="ckVoucherMsg" class="ck-voucher-msg ${_voucher.code?'ok':''}" ${_voucher.code?'':'hidden'}>
+            ${_voucher.code?`✓ ${escapeXML(_voucher.code)}: ${escapeXML(_voucher.message||'')}${_voucher.discount?` · giảm ${money(_voucher.discount)}`:''}`:''}
+          </div>
+        </div>
+        ${_voucher.code?`<div class="line ck-discount-line"><span>Giảm giá (${escapeXML(_voucher.code)})</span><span id="ckDiscountVal">-${money(_voucher.discount||0)}</span><button type="button" id="ckVoucherClear" title="Bỏ mã" class="ck-voucher-x">×</button></div>`:''}
         <div class="line" style="font-size:12px;color:var(--muted);margin-top:6px"><span>Hình thức</span><span>COD</span></div>
         <div class="total"><span>Tổng cộng</span><span class="cart-total-amount" id="ckTotal">${money(total)}</span></div>
         <button class="btn btn-dark btn-block" type="submit" form="ckForm" id="ckSubmit" style="margin-top:14px">Đặt hàng (COD)</button>
@@ -1370,12 +1472,14 @@ async function renderCart(){
             hintEl = $("#ckShipHint"), totEl = $("#ckTotal");
       if(!labelEl) return;  // trang đã bị re-render
       const setShip = (v, source, note="")=>{
-        ship = v; total = sub + v; shipSource = source;
+        // Voucher freeship đè lên ship thật
+        if(_voucher.type === "freeship") v = 0;
+        ship = v; shipSource = source;
+        total = Math.max(0, sub + v - (discount||0));
         valEl.textContent = v ? money(v) : "Miễn phí";
         labelEl.textContent = note ? `Phí giao hàng (${note})` : "Phí giao hàng";
         totEl.textContent = money(total);
-        // Freeship hint: ẩn nếu đã có ship động (GHN trả giá thật, không áp ngưỡng 500k)
-        if(source === "ghn" || sub >= 500000){
+        if(source === "ghn" || sub >= 500000 || _voucher.type === "freeship"){
           hintEl.style.display = "none";
         } else {
           hintEl.style.display = "";
@@ -1405,6 +1509,38 @@ async function renderCart(){
         setShip(FLAT_SHIP, "flat");
       }
     }
+    // ===== Voucher handlers =====
+    const vApply = $("#ckVoucherApply"), vClear = $("#ckVoucherClear"), vMsg = $("#ckVoucherMsg"), vIn = $("#ckVoucherCode");
+    if(vApply) vApply.onclick = async ()=>{
+      const code = (vIn.value||"").trim();
+      if(!code){ vMsg.removeAttribute("hidden"); vMsg.className="ck-voucher-msg err"; vMsg.textContent="Nhập mã giảm giá"; return; }
+      vApply.disabled = true; vApply.textContent = "Đang kiểm tra…";
+      vMsg.removeAttribute("hidden"); vMsg.className="ck-voucher-msg"; vMsg.textContent="Đang kiểm tra mã…";
+      try{
+        const r = await DB.checkVoucher(code, sub);
+        vApply.disabled = false; vApply.textContent = "Áp dụng";
+        if(!r.valid){
+          vMsg.className = "ck-voucher-msg err";
+          vMsg.textContent = "✗ " + (r.message||"Mã không hợp lệ");
+          sessionStorage.removeItem("ck_voucher");
+          return;
+        }
+        sessionStorage.setItem("ck_voucher", JSON.stringify(r));
+        draw(savedAddrs);   // re-render để hiển thị dòng giảm giá + cập nhật total
+        toast("Đã áp dụng mã " + r.code);
+      }catch(e){
+        vApply.disabled = false; vApply.textContent = "Áp dụng";
+        vMsg.className = "ck-voucher-msg err"; vMsg.textContent = "Lỗi: " + (e.message||e);
+      }
+    };
+    if(vClear) vClear.onclick = ()=>{
+      sessionStorage.removeItem("ck_voucher");
+      draw(savedAddrs);
+    };
+    if(vIn) vIn.addEventListener("keydown", e=>{
+      if(e.key === "Enter"){ e.preventDefault(); vApply.click(); }
+    });
+
     bindAddressPicker(prefillStruct, recomputeShipping);
     // Nếu prefill đã có đủ địa chỉ (3 cấp) → tính ngay
     if(prefillStruct && prefillStruct.province_code && prefillStruct.district_code && prefillStruct.ward_code){
@@ -1512,10 +1648,15 @@ async function renderCart(){
         items:Cart.items.map(x=>{ const p=S.getProduct(x.id);
           return {id:x.id,name:x.name,price:x.price,color:x.color,size:x.size,qty:x.qty, image:(p&&p.image_url)||null}; }),
         subtotal:sub, shipping:ship, total:total,
+        voucher_code: _voucher.code || null,
+        voucher_discount: _voucher.code ? (_voucher.type === "freeship" ? (FLAT_SHIP || 0) : (discount||0)) : 0,
       };
       try{
         const saved=await DB.createOrder(order);
         saveMyOrder(saved);
+        // (Voucher consume + stock decrement đều đã làm trong RPC create_order
+        //  — security: trước đây client tự gọi consume_voucher → abuse được.)
+        sessionStorage.removeItem("ck_voucher");
         saveLastContact({
           customer_name:name, phone, email, address,
           street:order.street,
@@ -1524,6 +1665,7 @@ async function renderCart(){
           ward_code:order.ward_code, ward_name:order.ward_name,
         });
         clearCheckoutDraft();
+        if(window.SEO) SEO.trackPurchase(saved);
         Cart.items=[]; Cart.save();
         // Gửi email XÁC NHẬN trước khi chuyển trang. KHÔNG fire-and-forget vì
         // browser huỷ XHR khi navigate. Đợi tối đa 6s rồi chuyển trang (giữ nguyên "Đang xử lý...").
@@ -1899,6 +2041,18 @@ async function renderOrder(){
       </form>
       ${recentBlock}
     </div>`;
+    // SECURITY: khách ẩn danh phải nhập SĐT cuối 4 số để xem đơn (chống brute order code)
+    // Khách đã login thì RPC dùng auth.uid() — không bắt phone.
+    const needsPhone = !Auth.isLoggedIn();
+    if(needsPhone){
+      const form = $("#lookup");
+      const phoneFld = document.createElement("div");
+      phoneFld.className = "fld";
+      phoneFld.style.cssText = "flex:1;margin:0";
+      phoneFld.innerHTML = `<input id="phoneInput" placeholder="4 số cuối SĐT đã đặt đơn" inputmode="numeric" maxlength="4" required>`;
+      const btn = form.querySelector("button[type=submit]");
+      form.insertBefore(phoneFld, btn);
+    }
     $("#lookup").onsubmit=e=>{
       e.preventDefault();
       const btn=e.target.querySelector("button[type=submit]");
@@ -1906,8 +2060,15 @@ async function renderOrder(){
       const inp=$("#codeInput"), c=inp.value.trim();
       if(!c){ setFieldError(inp, "Vui lòng nhập mã đơn"); inp.focus(); return; }
       setFieldError(inp,"");
+      let url = "order.html?code="+encodeURIComponent(c);
+      if(needsPhone){
+        const pinp = $("#phoneInput");
+        const tail = (pinp.value||"").replace(/\D/g,"").slice(-4);
+        if(tail.length < 4){ setFieldError(pinp, "Nhập đủ 4 số cuối SĐT"); pinp.focus(); return; }
+        url += "&t="+encodeURIComponent(tail);
+      }
       if(btn){ btn.disabled=true; btn.textContent="Đang chuyển…"; }
-      location.href="order.html?code="+encodeURIComponent(c);
+      location.href=url;
     };
     const ovl=$("#ovLogin"); if(ovl) ovl.onclick=openLoginModal;
     // Click vào hàng đơn → mở modal chi tiết (không cần fetch lại từ server)
@@ -1921,9 +2082,16 @@ async function renderOrder(){
 
   showAppLoader();
   let o=null;
-  try{ o=await DB.getOrderByCode(code); }catch(e){ console.warn(e); }
+  // Pass phone tail từ URL (?t=1234) cho khách ẩn danh.
+  const phoneTail = (param("t")||"").replace(/\D/g,"").slice(-4);
+  try{ o=await DB.getOrderByCode(code, phoneTail); }catch(e){ console.warn(e); }
   hideAppLoader();
-  if(!o){ await lookupView(`Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Vui lòng kiểm tra lại mã.`); return; }
+  if(!o){
+    const msg = (!Auth.isLoggedIn() && !phoneTail)
+      ? `Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Có thể bạn cần nhập 4 số cuối SĐT.`
+      : `Không tìm thấy đơn <strong>${escapeXML(code)}</strong>. Kiểm tra lại mã đơn và 4 số cuối SĐT.`;
+    await lookupView(msg); return;
+  }
 
   const st=ORDER_STATUS[o.status]||ORDER_STATUS.pending;
   const steps=["pending","confirmed","shipping","completed"];
@@ -2184,11 +2352,37 @@ const Home = {
 };
 
 /* ---------------- CATALOG ---------------- */
+// Cloud mode: LUÔN replace PRODUCTS bằng data cloud (kể cả rỗng), không giữ
+// demo data từ data.js (id là slug, không match UUID schema → crash khi
+// add to cart + checkout). Local mode: giữ demo seed.
 const Catalog = { loaded:false, async load(){
-  try{ const rows=await DB.listProducts(); if(rows&&rows.length) S.PRODUCTS.splice(0,S.PRODUCTS.length,...rows); }
-  catch(e){ console.warn("Catalog.load",e); }
+  try{
+    const rows = await DB.listProducts();
+    if(DB.cloud){
+      S.PRODUCTS.splice(0, S.PRODUCTS.length, ...(rows||[]));
+    } else if(rows && rows.length){
+      S.PRODUCTS.splice(0, S.PRODUCTS.length, ...rows);
+    }
+  }catch(e){ console.warn("Catalog.load",e); }
   this.loaded=true;
 }};
+
+// Cart cleanup: bỏ item có id không match UUID khi cloud mode. Tránh trường
+// hợp user còn cart cũ với slug ID (từ session trước khi cloud setup xong).
+function pruneCartForCloud(){
+  if(!DB.cloud) return;
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
+  const before = Cart.items.length;
+  Cart.items = Cart.items.filter(it => uuidRe.test(it.id||""));
+  if(Cart.items.length < before){
+    Cart.save();
+    const dropped = before - Cart.items.length;
+    console.warn("[Cart] đã xoá", dropped, "item không hợp lệ (slug ID cũ từ demo data)");
+    setTimeout(()=>{
+      if(typeof toast === "function") toast(`Đã xoá ${dropped} sản phẩm cũ khỏi giỏ`);
+    }, 800);
+  }
+}
 
 /* ---------------- LOADING OVERLAY (đơn giản, transparent + blur) ---------------- */
 function showAppLoader(){
@@ -2290,6 +2484,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   const page = document.body.dataset.page;
   await Promise.all([Categories.load(), Colors.load(), Home.load(), Auth.init()]);
   await Catalog.load();
+  pruneCartForCloud();   // bỏ item slug ID cũ ra khỏi cart trước khi render
   renderHeader();
   renderFooter();
   if(page==="home") renderHome();

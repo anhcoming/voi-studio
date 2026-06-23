@@ -46,4 +46,19 @@ window.CONFIG = {
   EMAILJS_PUBLIC_KEY:  "D5Aq7Zj2uTal-Uw1K",
   EMAILJS_SERVICE_ID:  "service_up6f2px",
   EMAILJS_TEMPLATE_ID: "template_op0rvmq",
+
+  /* ---------- SEO & ANALYTICS ----------
+     Để TRỐNG ID nào ➜ script đó tự tắt, không inject gì.
+     SITE_URL: dùng cho canonical URL + OG (vd "https://voi-studio.vercel.app").
+                  Để trống ➜ tự lấy location.origin.
+     OG_DEFAULT_IMAGE: ảnh share Facebook/Zalo cho trang không phải product.
+     GA4_ID:        Google Analytics 4 (dạng "G-XXXXXXX")
+     FB_PIXEL_ID:   Facebook Pixel (dạng "123456789012345")
+     TIKTOK_PIXEL_ID: TikTok Pixel (dạng "CXXXXXXXXXXXXXXX")
+  -------------------------------------- */
+  SITE_URL:          "https://voi-studio.vercel.app",
+  OG_DEFAULT_IMAGE:  "",
+  GA4_ID:            "",
+  FB_PIXEL_ID:       "",
+  TIKTOK_PIXEL_ID:   "",
 };

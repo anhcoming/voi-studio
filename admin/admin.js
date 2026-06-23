@@ -38,8 +38,7 @@ function toast(msg){
 /* ---------------- BOOT / AUTH ---------------- */
 async function boot(){
   A.user = await DB.getUser();
-  // Load danh sách admin từ DB (1 nguồn) trước khi quyết định cho vào
-  if(DB._loadAdminEmails) await DB._loadAdminEmails();
+  // Check quyền admin qua RPC am_i_admin (server-side, không lộ danh sách email)
   const allowed = DB.isAdminAsync ? await DB.isAdminAsync(A.user) : DB.isAdmin(A.user);
   if(!A.user || !allowed){ renderLogin(A.user); return; }
   await Promise.all([loadCats(), loadColors()]);
@@ -89,6 +88,7 @@ function renderShell(){
     <button data-tab="products">Sản phẩm</button>
     <button data-tab="categories">Danh mục</button>
     <button data-tab="colors">Màu sắc</button>
+    <button data-tab="vouchers">Voucher</button>
     <button data-tab="home">Trang chủ</button>
   </div></div>
   <div class="admin-wrap" id="adminContent"></div>`;
@@ -111,6 +111,7 @@ function switchTab(tab){
   else if(tab==="categories") renderCategories();
   else if(tab==="colors") renderColors();
   else if(tab==="home") renderHomeSettings();
+  else if(tab==="vouchers") renderVouchers();
   else renderProducts();
 }
 
@@ -1766,6 +1767,158 @@ function openModal(html, cls=""){
 function closeModal(){ const m=$("#adminModal"); if(m){ m.classList.remove("show"); setTimeout(()=>m.remove(),180); } document.body.style.overflow=""; }
 // Escape đóng modal admin (form sửa SP, danh mục, đơn…)
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && $("#adminModal")) closeModal(); });
+
+/* ---------------- VOUCHERS ---------------- */
+let _vouchers=[];
+const VTYPE_LABEL = { percent:"% theo đơn", fixed:"Số tiền cố định", freeship:"Miễn phí ship" };
+async function renderVouchers(){
+  const c=$("#adminContent");
+  c.innerHTML=`<div class="empty-state">Đang tải voucher…</div>`;
+  _vouchers = await DB.listVouchers();
+  drawVouchers();
+}
+function drawVouchers(){
+  const c=$("#adminContent");
+  const total = _vouchers.length;
+  const active = _vouchers.filter(v=>v.active).length;
+  const used   = _vouchers.reduce((s,v)=>s+(v.used_count||0),0);
+  c.innerHTML=`
+  <div class="admin-head">
+    <h1>Voucher</h1>
+    <div class="admin-actions">
+      <button class="btn btn-dark" id="addV" style="padding:9px 18px">+ Tạo voucher</button>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="k">Tổng voucher</div><div class="v">${total}</div></div>
+    <div class="stat"><div class="k">Đang bật</div><div class="v green">${active}</div></div>
+    <div class="stat"><div class="k">Đã dùng (lượt)</div><div class="v">${used}</div></div>
+  </div>
+  ${_vouchers.length ? `<div class="tablewrap"><table class="tbl">
+    <thead><tr><th>Mã</th><th>Loại</th><th>Giá trị</th><th>ĐK tối thiểu</th><th>Đã dùng / Tối đa</th><th>Hiệu lực</th><th>Trạng thái</th><th></th></tr></thead>
+    <tbody>${_vouchers.map(v=>{
+      const value = v.discount_type === "percent" ? `${v.discount_value}%${v.max_discount?` (max ${money(v.max_discount)})`:""}`
+        : v.discount_type === "fixed" ? money(v.discount_value)
+        : "Freeship";
+      const usage = `${v.used_count||0}${v.max_uses?` / ${v.max_uses}`:" / ∞"}`;
+      const period = [
+        v.starts_at ? `từ ${new Date(v.starts_at).toLocaleDateString("vi-VN")}` : "",
+        v.expires_at ? `→ ${new Date(v.expires_at).toLocaleDateString("vi-VN")}` : "",
+      ].filter(Boolean).join(" ") || "Vô hạn";
+      return `<tr>
+        <td><b style="font-family:var(--font-display);letter-spacing:.05em">${esc(v.code)}</b>${v.description?`<div class="muted" style="font-size:11.5px;margin-top:2px">${esc(v.description)}</div>`:""}</td>
+        <td><span class="pill" style="background:${v.discount_type==='freeship'?'#1d9e75':v.discount_type==='percent'?'#7a5cff':'#d8a441'}">${VTYPE_LABEL[v.discount_type]||v.discount_type}</span></td>
+        <td><b>${value}</b></td>
+        <td>${v.min_order?money(v.min_order):"—"}</td>
+        <td>${usage}</td>
+        <td style="font-size:12px">${period}</td>
+        <td><span class="${v.active?'tag-on':'tag-off'} pill">${v.active?"Bật":"Tắt"}</span></td>
+        <td style="white-space:nowrap">
+          <button class="mini vedit" data-id="${v.id}">Sửa</button>
+          <button class="mini danger vdel" data-id="${v.id}">Xoá</button>
+        </td>
+      </tr>`;
+    }).join("")}</tbody></table></div>` : `<div class="empty-state">Chưa có voucher nào. Bấm "+ Tạo voucher" để thêm.</div>`}`;
+
+  $("#addV").onclick = ()=>voucherModal(null);
+  $$(".vedit").forEach(b=>b.onclick=()=>voucherModal(_vouchers.find(x=>x.id===b.dataset.id)));
+  $$(".vdel").forEach(b=>b.onclick=async()=>{
+    const v = _vouchers.find(x=>x.id===b.dataset.id);
+    const ok = await confirmDialog({
+      title:"Xoá voucher?", body:`Voucher "<b>${esc(v.code)}</b>" sẽ bị xoá vĩnh viễn.`,
+      confirmText:"Xoá", danger:true,
+    });
+    if(!ok) return;
+    try{ await DB.deleteVoucher(v.id); _vouchers = _vouchers.filter(x=>x.id!==v.id); drawVouchers(); toast("Đã xoá"); }
+    catch(e){ toast("Lỗi: "+(e.message||e)); }
+  });
+}
+function voucherModal(v){
+  const isEdit = !!v;
+  v = v || { code:"", description:"", discount_type:"percent", discount_value:10, min_order:0, max_discount:null, max_uses:null, starts_at:null, expires_at:null, active:true };
+  openModal(`<h3 class="modal-title">${isEdit?"Sửa":"Tạo"} voucher</h3>
+    <form id="vForm" novalidate>
+      <div class="frow">
+        <label class="fld"><span>Mã (UPPERCASE, không khoảng trắng)</span>
+          <input name="code" value="${esc(v.code||"")}" required pattern="[A-Z0-9_]+" placeholder="VD: SALE10, FREESHIP" style="text-transform:uppercase;font-family:var(--font-display);letter-spacing:.04em">
+        </label>
+        <label class="fld"><span>Loại giảm</span>
+          <select name="discount_type">
+            <option value="percent"  ${v.discount_type==='percent'?'selected':''}>% theo đơn</option>
+            <option value="fixed"    ${v.discount_type==='fixed'?'selected':''}>Số tiền cố định</option>
+            <option value="freeship" ${v.discount_type==='freeship'?'selected':''}>Miễn phí ship</option>
+          </select>
+        </label>
+      </div>
+      <label class="fld"><span>Mô tả ngắn (cho admin xem)</span>
+        <input name="description" value="${esc(v.description||"")}" placeholder="VD: Giảm 10% cho khách mới">
+      </label>
+      <div class="frow">
+        <label class="fld" id="vValueField"><span>Giá trị giảm <span id="vUnit">(%)</span></span>
+          <input name="discount_value" type="number" min="0" value="${v.discount_value||0}" required>
+        </label>
+        <label class="fld" id="vMaxField"><span>Trần giảm tối đa (chỉ áp cho %)</span>
+          <input name="max_discount" type="number" min="0" value="${v.max_discount||""}" placeholder="VD 50000 (để trống = không trần)">
+        </label>
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Đơn tối thiểu (VND)</span>
+          <input name="min_order" type="number" min="0" value="${v.min_order||0}" placeholder="0 = không yêu cầu">
+        </label>
+        <label class="fld"><span>Số lượt dùng tối đa</span>
+          <input name="max_uses" type="number" min="1" value="${v.max_uses||""}" placeholder="Trống = vô hạn">
+        </label>
+      </div>
+      <div class="frow">
+        <label class="fld"><span>Bắt đầu</span>
+          <input name="starts_at" type="datetime-local" value="${v.starts_at?new Date(v.starts_at).toISOString().slice(0,16):""}">
+        </label>
+        <label class="fld"><span>Hết hạn</span>
+          <input name="expires_at" type="datetime-local" value="${v.expires_at?new Date(v.expires_at).toISOString().slice(0,16):""}">
+        </label>
+      </div>
+      <label class="fld" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input name="active" type="checkbox" ${v.active!==false?"checked":""} style="width:18px;height:18px">
+        <span style="font-weight:600">Đang bật</span>
+      </label>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">Huỷ</button>
+        <button class="btn btn-dark" type="submit">Lưu</button>
+      </div>
+    </form>`);
+  const form = $("#vForm");
+  // Dynamic label theo loại
+  const updateUnit = ()=>{
+    const t = form.discount_type.value;
+    const valWrap = $("#vValueField"), maxWrap = $("#vMaxField");
+    const unit = $("#vUnit");
+    if(t === "percent"){ valWrap.style.display=""; unit.textContent="(%)"; maxWrap.style.display=""; }
+    else if(t === "fixed"){ valWrap.style.display=""; unit.textContent="(VND)"; maxWrap.style.display="none"; }
+    else { valWrap.style.display="none"; maxWrap.style.display="none"; }
+  };
+  form.discount_type.onchange = updateUnit; updateUnit();
+  form.code.oninput = (e)=>{ e.target.value = e.target.value.toUpperCase().replace(/\s+/g,""); };
+  form.onsubmit = async(e)=>{
+    e.preventDefault();
+    const payload = {
+      id: v.id, code: form.code.value, description: form.description.value,
+      discount_type: form.discount_type.value,
+      discount_value: +form.discount_value.value||0,
+      min_order: +form.min_order.value||0,
+      max_discount: form.max_discount.value ? +form.max_discount.value : null,
+      max_uses: form.max_uses.value ? +form.max_uses.value : null,
+      starts_at: form.starts_at.value ? new Date(form.starts_at.value).toISOString() : null,
+      expires_at: form.expires_at.value ? new Date(form.expires_at.value).toISOString() : null,
+      active: form.active.checked,
+    };
+    try{
+      const saved = await DB.saveVoucher(payload);
+      if(v.id){ const idx = _vouchers.findIndex(x=>x.id===v.id); if(idx>=0) _vouchers[idx] = saved; }
+      else { _vouchers.unshift(saved); }
+      closeModal(); drawVouchers(); toast(v.id?"Đã cập nhật":"Đã tạo voucher");
+    }catch(e){ toast("Lỗi: "+(e.message||e)); }
+  };
+}
 
 /* ---------------- START ---------------- */
 document.addEventListener("DOMContentLoaded", ()=>{

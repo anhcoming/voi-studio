@@ -29,17 +29,32 @@ const GHN_BASE = GHN_ENV === "dev"
   ? "https://dev-online-gateway.ghn.vn/shiip/public-api"
   : "https://online-gateway.ghn.vn/shiip/public-api";
 
-const CORS = {
-  "access-control-allow-origin":  "*",
-  "access-control-allow-headers": "authorization, content-type, x-client-info, apikey",
-  "access-control-allow-methods": "POST, OPTIONS",
-};
+// CORS: chỉ cho phép các origin trong env ALLOWED_ORIGINS (CSV).
+// Mặc định "*" — nếu set ALLOWED_ORIGINS="https://voi-studio.vercel.app,https://voistudio.com"
+// thì chỉ những origin đó được gọi. Echo lại Origin khi match để tránh leak.
+const ALLOWED_ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") || "")
+  .split(",").map(s => s.trim()).filter(Boolean);
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
+function corsHeaders(req: Request): Record<string,string> {
+  const origin = req.headers.get("origin") || "";
+  let allow = "*";
+  if (ALLOWED_ORIGINS.length) {
+    allow = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  }
+  return {
+    "access-control-allow-origin":  allow,
+    "access-control-allow-headers": "authorization, content-type, x-client-info, apikey",
+    "access-control-allow-methods": "POST, OPTIONS",
+    "vary": "origin",
+  };
+}
+
+function jsonResp(req: Request, body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...CORS },
+    headers: { "content-type": "application/json", ...corsHeaders(req) },
   });
+}
 
 // ---------- helper: gọi GHN ----------
 type GhnResp = {
@@ -392,60 +407,36 @@ function statusName(s: string): string {
 
 // ---------- entry ----------
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  if (req.method !== "POST")    return json({ error: "POST only" }, 405);
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders(req) });
+  if (req.method !== "POST")    return jsonResp(req, { error: "POST only" }, 405);
 
   try {
     const body = await req.json();
     const action = String(body.action || "").toLowerCase();
-    if (!action) return json({ error: "Thiếu action" }, 400);
+    if (!action) return jsonResp(req, { error: "Thiếu action" }, 400);
 
     // Service-role client để bỏ qua RLS (đã xác thực qua action)
     const supa = createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: false } });
 
-    // Một số action chỉ admin mới được gọi — verify JWT + check admin_emails table.
-    // [DIAG-v3] Có log chi tiết trong response để debug 403.
+    // Admin actions: verify JWT + check admin_emails table.
+    // SECURITY: KHÔNG return diag (cũ leak full danh sách admin), KHÔNG bootstrap
+    // hardcode email (cũ cho phép 1 email cố định luôn là admin nếu bảng rỗng).
     const adminActions = new Set(["create", "cancel", "print"]);
     if (adminActions.has(action)) {
       const authHeader = req.headers.get("authorization") || "";
       const jwt = authHeader.replace(/^Bearer\s+/i, "");
-      if (!jwt) return json({ error: "[v3] Cần đăng nhập admin (no JWT)" }, 401);
+      if (!jwt) return jsonResp(req, { error: "Cần đăng nhập admin" }, 401);
 
-      // Bước 1: decode JWT trực tiếp (không qua Supabase Auth) để chắc chắn lấy được email
-      let emailFromJwt = "";
-      try {
-        const payload = JSON.parse(atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-        emailFromJwt = (payload.email || "").toLowerCase();
-      } catch (e) {
-        return json({ error: "[v3] JWT không decode được", detail: (e as Error).message }, 401);
-      }
-
-      // Bước 2: verify JWT qua Supabase (xác nhận chữ ký + chưa hết hạn)
+      // Verify JWT qua Supabase (xác nhận chữ ký + chưa hết hạn)
       const u = await supa.auth.getUser(jwt);
-      const emailVerified = (u.data?.user?.email || "").toLowerCase();
+      if (u.error || !u.data?.user?.email) {
+        return jsonResp(req, { error: "Token không hợp lệ" }, 401);
+      }
+      const email = u.data.user.email.toLowerCase();
 
-      // Bước 3: check admin_emails — dùng email từ JWT decode (chắc chắn có) làm fallback
-      const email = emailVerified || emailFromJwt;
       const inTable = await supa.from("admin_emails").select("email").ilike("email", email).maybeSingle();
-      const allRows = await supa.from("admin_emails").select("email");
-
-      const isAdmin = !!inTable.data;
-      const bootstrap = !allRows.data?.length && email === "anhcoming@gmail.com";
-
-      if (!isAdmin && !bootstrap) {
-        return json({
-          error: "[v3] Email không có quyền admin",
-          diag: {
-            email_from_jwt: emailFromJwt,
-            email_verified: emailVerified,
-            jwt_verify_error: u.error?.message || null,
-            admin_emails_table_all: allRows.data,
-            admin_emails_table_error: allRows.error?.message || null,
-            inTable_match: inTable.data,
-            inTable_error: inTable.error?.message || null,
-            isAdmin, bootstrap,
-          },
-        }, 403);
+      if (!inTable.data) {
+        return jsonResp(req, { error: "Email không có quyền admin" }, 403);
       }
     }
 
@@ -459,10 +450,10 @@ Deno.serve(async (req) => {
       case "print":   data = await handlePrint(supa, body);  break;
       case "resolve": data = await resolveAddress(
                           supa, body.province_name, body.district_name, body.ward_name); break;
-      default: return json({ error: `Action không hợp lệ: ${action}` }, 400);
+      default: return jsonResp(req, { error: `Action không hợp lệ: ${action}` }, 400);
     }
-    return json({ ok: true, data });
+    return jsonResp(req, { ok: true, data });
   } catch (e) {
-    return json({ ok: false, error: (e as Error).message }, 400);
+    return jsonResp(req, { ok: false, error: (e as Error).message }, 400);
   }
 });
