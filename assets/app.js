@@ -2165,7 +2165,7 @@ async function renderOrder(){
   if(param("new")==="1"){
     const sentTo = sessionStorage.getItem("ck_email_sent_"+o.code);
     if(sentTo){
-      toast("Đặt hàng thành công! Đã gửi email xác nhận tới "+sentTo);
+      toast("Đặt hàng thành công! \nĐã gửi email tới "+sentTo);
       sessionStorage.removeItem("ck_email_sent_"+o.code);
     } else {
       toast("Đặt hàng thành công! Mã đơn: "+o.code);

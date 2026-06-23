@@ -7,16 +7,18 @@
   <meta name="robots" content="noindex">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="../assets/styles.css">
-  <link rel="stylesheet" href="admin.css">
+  <!-- Dùng đường dẫn tuyệt đối (đầu /) để hoạt động đúng cả khi Vercel
+       serve trang dưới URL "/admin" (không trailing slash) lẫn "/admin/". -->
+  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
   <div class="login-screen"><div class="login-card"><div class="logo">VOISTUDIO<span class="dot">.</span></div><p>Đang tải…</p></div></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="../assets/config.js"></script>
-  <script src="../assets/data.js"></script>
-  <script src="../assets/store-api.js"></script>
-  <script src="../assets/ghn-client.js"></script>
-  <script src="admin.js"></script>
+  <script src="/assets/config.js"></script>
+  <script src="/assets/data.js"></script>
+  <script src="/assets/store-api.js"></script>
+  <script src="/assets/ghn-client.js"></script>
+  <script src="/admin/admin.js"></script>
 </body>
 </html>
