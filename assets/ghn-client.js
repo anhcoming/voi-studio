@@ -51,18 +51,17 @@
     enabled,
 
     /* Tính phí ship theo địa chỉ. Trả {total, service_fee, ...} hoặc throw.
-       Có cache nhẹ để gõ liên tục không spam. */
-    async fee({ province_name, district_name, ward_name, weight, insurance_value }){
-      if(!province_name || !district_name || !ward_name){
-        throw new Error("Cần đủ Tỉnh + Quận/Huyện + Phường/Xã");
+       Truyền GHN IDs trực tiếp (to_district_id + to_ward_code) — frontend đã
+       lấy IDs này từ GHN.master(...). Có cache nhẹ. */
+    async fee({ to_district_id, to_ward_code, weight, insurance_value }){
+      if(!to_district_id || !to_ward_code){
+        throw new Error("Cần GHN district_id + ward_code");
       }
-      const k = JSON.stringify({ province_name, district_name, ward_name, weight, insurance_value });
+      const k = JSON.stringify({ to_district_id, to_ward_code, weight, insurance_value });
       const hit = _feeCache.get(k);
       if(hit && (Date.now() - hit.at) < FEE_TTL) return hit.val;
       const val = await call("fee", {
-        to_province_name: province_name,
-        to_district_name: district_name,
-        to_ward_name:     ward_name,
+        to_district_id, to_ward_code,
         weight, insurance_value,
       });
       _feeCache.set(k, { at: Date.now(), val });

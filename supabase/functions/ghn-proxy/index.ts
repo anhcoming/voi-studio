@@ -177,26 +177,27 @@ async function resolveAddress(
 
 // ---------- action handlers ----------
 async function handleFee(supa: SupabaseClient, p: any) {
-  // Input: { to_province_name, to_district_name, to_ward_name, weight, length, width, height,
+  // Input: { to_district_id, to_ward_code, weight, length, width, height,
   //          from_district_id, service_type_id, insurance_value }
-  const dst = await resolveAddress(supa, p.to_province_name, p.to_district_name, p.to_ward_name);
-  if (!dst.ghn_district_id || !dst.ghn_ward_code) {
-    throw new Error("Cần đủ Tỉnh + Quận/Huyện + Phường/Xã để tính phí GHN");
+  // Nhận GHN IDs trực tiếp từ frontend (đã dùng GHN.master() để pick), không
+  // cần resolve từ name → ID nữa.
+  if (!p.to_district_id || !p.to_ward_code) {
+    throw new Error("Thiếu GHN district_id hoặc ward_code");
   }
   const cfg = await getShopCfg(supa);
   const data = await ghn("/v2/shipping-order/fee", {
     from_district_id: p.from_district_id || cfg.from_district_id,
     from_ward_code:   p.from_ward_code   || cfg.from_ward_code,
     service_type_id:  p.service_type_id  || cfg.service_type_id || 2,
-    to_district_id:   dst.ghn_district_id,
-    to_ward_code:     dst.ghn_ward_code,
+    to_district_id:   +p.to_district_id,
+    to_ward_code:     String(p.to_ward_code),
     weight:           p.weight || cfg.default_weight || 300,
     length:           p.length || cfg.default_length || 25,
     width:            p.width  || cfg.default_width  || 20,
     height:           p.height || cfg.default_height || 5,
     insurance_value:  p.insurance_value || 0,
   });
-  return { total: data.total, service_fee: data.service_fee, insurance_fee: data.insurance_fee, resolved: dst };
+  return { total: data.total, service_fee: data.service_fee, insurance_fee: data.insurance_fee };
 }
 
 async function handleCreate(supa: SupabaseClient, p: any) {
@@ -207,9 +208,16 @@ async function handleCreate(supa: SupabaseClient, p: any) {
   if (error || !o) throw new Error("Không tìm thấy đơn " + code);
   if (o.ghn_order_code) throw new Error(`Đơn ${code} đã có mã GHN: ${o.ghn_order_code}`);
 
-  const dst = await resolveAddress(supa, o.province_name, o.district_name, o.ward_name);
-  if (!dst.ghn_district_id || !dst.ghn_ward_code) {
-    throw new Error("Địa chỉ đơn không đủ Tỉnh/Huyện/Xã để gửi GHN");
+  // Đơn mới: province_code/district_code/ward_code lưu trực tiếp GHN IDs
+  // (frontend dùng GHN.master() để pick). Đơn cũ (lưu VN gov code) thì fail
+  // ở đây — yêu cầu admin sửa địa chỉ thủ công.
+  const to_district_id = parseInt(o.district_code || "");
+  const to_ward_code   = o.ward_code ? String(o.ward_code) : "";
+  if (!to_district_id || !to_ward_code) {
+    throw new Error(
+      "Đơn này thiếu GHN district_id / ward_code. " +
+      "Có thể là đơn cũ tạo trước khi chuyển sang GHN address — sửa lại địa chỉ trong admin."
+    );
   }
   const cfg = await getShopCfg(supa);
 
@@ -244,8 +252,8 @@ async function handleCreate(supa: SupabaseClient, p: any) {
     to_name:          o.customer_name,
     to_phone:         o.phone,
     to_address:       o.address,
-    to_ward_code:     dst.ghn_ward_code,
-    to_district_id:   dst.ghn_district_id,
+    to_ward_code:     to_ward_code,
+    to_district_id:   to_district_id,
     cod_amount:       p.cod_amount ?? (o.total || 0),  // COD = tổng đơn
     weight:           p.weight || cfg.default_weight || 300,
     length:           p.length || cfg.default_length || 25,

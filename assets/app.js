@@ -1415,10 +1415,6 @@ async function renderCart(){
             <label class="fld"><span>Email *</span><input name="email" type="email" required inputmode="email" autocomplete="email" placeholder="ban@example.com" value="${escapeXML(prefillEmail)}">
               <small class="muted" style="font-size:12px;display:block;margin-top:4px">${emailHint}</small></label>
             <label class="fld fld-addr"><span>Địa chỉ nhận hàng *</span>
-              <div class="addr-mode-switch" role="tablist" aria-label="Cấu trúc hành chính">
-                <button type="button" class="addr-mode-opt active" data-mode="new">📅 Mới — 34 tỉnh thành</button>
-                <button type="button" class="addr-mode-opt" data-mode="old">🗓 Cũ — 63 tỉnh thành</button>
-              </div>
               <div class="addr-picker">
                 <button type="button" class="addr-sel" data-level="p" id="addrPBtn">
                   <span class="addr-sel-cap">Tỉnh / Thành phố</span>
@@ -1505,16 +1501,16 @@ async function renderCart(){
       if(!ghnEnabled || !st || !st.p || !st.d || !st.w){
         setShip(FLAT_SHIP, "flat"); return;
       }
-      // Gọi GHN; giữ flat trong lúc chờ
+      // Gọi GHN; giữ flat trong lúc chờ. Truyền GHN IDs trực tiếp (không
+       // qua resolveAddress) — code lưu trong state.* chính là GHN IDs.
       const myReq = ++_shipReqId;
       labelEl.textContent = "Phí giao hàng (đang tính…)";
       try{
         const r = await GHN.fee({
-          province_name: st.p.name,
-          district_name: st.d.name,
-          ward_name:     st.w.name,
+          to_district_id: +st.d.code,
+          to_ward_code:   String(st.w.code),
         });
-        if(myReq !== _shipReqId) return;  // có request mới đè lên
+        if(myReq !== _shipReqId) return;
         setShip(+r.total || FLAT_SHIP, "ghn", "GHN");
       }catch(e){
         if(myReq !== _shipReqId) return;
@@ -1722,27 +1718,31 @@ function saveCheckoutDraft(data){ try{ localStorage.setItem(CHECKOUT_DRAFT_KEY, 
 function clearCheckoutDraft(){ try{ localStorage.removeItem(CHECKOUT_DRAFT_KEY); }catch(e){} }
 
 /* Shopee-style address picker — 3 dropdown cascade (Tỉnh → Huyện → Xã) + ô số nhà/đường.
-   Data: provinces.open-api.vn (free, không cần API key). Cache trong session. */
-const VN_ADDR_API = "https://provinces.open-api.vn/api";
+   Data: GHN master-data API qua edge function `ghn-proxy?action=master`.
+   Mã địa chỉ trong đơn = GHN IDs trực tiếp → không cần resolve name → ID
+   khi push lên GHN nữa (xóa case "không đủ Tỉnh/Huyện/Xã"). */
 const _addrCache = { provinces: null, district: {}, ward: {} };
+// Map raw GHN row → {code, name} cho picker UI
+const ghnProvinceItem = r => ({ code: String(r.ProvinceID), name: r.ProvinceName });
+const ghnDistrictItem = r => ({ code: String(r.DistrictID), name: r.DistrictName });
+const ghnWardItem     = r => ({ code: String(r.WardCode),   name: r.WardName });
+
 async function fetchProvinces(){
   if(_addrCache.provinces) return _addrCache.provinces;
-  const res = await fetch(`${VN_ADDR_API}/p/`);
-  _addrCache.provinces = await res.json();
+  const rows = await GHN.master("province");
+  _addrCache.provinces = (Array.isArray(rows)?rows:[]).map(ghnProvinceItem);
   return _addrCache.provinces;
 }
 async function fetchDistricts(provinceCode){
   if(_addrCache.district[provinceCode]) return _addrCache.district[provinceCode];
-  const res = await fetch(`${VN_ADDR_API}/p/${provinceCode}?depth=2`);
-  const data = await res.json();
-  _addrCache.district[provinceCode] = data.districts||[];
+  const rows = await GHN.master("district", { province_id: +provinceCode });
+  _addrCache.district[provinceCode] = (Array.isArray(rows)?rows:[]).map(ghnDistrictItem);
   return _addrCache.district[provinceCode];
 }
 async function fetchWards(districtCode){
   if(_addrCache.ward[districtCode]) return _addrCache.ward[districtCode];
-  const res = await fetch(`${VN_ADDR_API}/d/${districtCode}?depth=2`);
-  const data = await res.json();
-  _addrCache.ward[districtCode] = data.wards||[];
+  const rows = await GHN.master("ward", { district_id: +districtCode });
+  _addrCache.ward[districtCode] = (Array.isArray(rows)?rows:[]).map(ghnWardItem);
   return _addrCache.ward[districtCode];
 }
 function openAddrPicker(title, list, onSelect){
@@ -1812,8 +1812,6 @@ function bindAddressPicker(prefill, onChange){
   const state = { p: null, d: null, w: null };
   _addrPickerState = state;
   const fire = ()=>{ if(typeof onChange==="function") try{ onChange(state); }catch(e){} };
-  // Mặc định "new" (34 tỉnh, 2 cấp); user toggle sang "old" để chọn theo 3 cấp.
-  let mode = "new";
   const setLabel = (btn, txt, active)=>{
     const val = btn.querySelector(".addr-sel-val");
     if(val) val.textContent = txt;
@@ -1830,22 +1828,6 @@ function bindAddressPicker(prefill, onChange){
     if(addrInp.value) setFieldError(addrInp, "");
   };
   const loadingBtn = (btn, on)=>{ btn.disabled = on; btn.classList.toggle("loading", on); };
-  const applyMode = ()=>{
-    if(mode==="new"){ dBtn.style.display = "none"; }
-    else { dBtn.style.display = ""; }
-    state.p = state.d = state.w = null;
-    setLabel(pBtn, "Chọn", false);
-    setLabel(dBtn, "Chọn", false); dBtn.disabled = true;
-    setLabel(wBtn, "Chọn", false); wBtn.disabled = true;
-    syncFinal();
-  };
-  applyMode(); // áp dụng default "new" ngay
-  $$(".addr-mode-opt").forEach(b=> b.onclick=()=>{
-    if(b.classList.contains("active")) return;
-    $$(".addr-mode-opt").forEach(x=>x.classList.toggle("active", x===b));
-    mode = b.dataset.mode;
-    applyMode();
-  });
   pBtn.onclick = async ()=>{
     loadingBtn(pBtn, true);
     try{
@@ -1854,12 +1836,8 @@ function bindAddressPicker(prefill, onChange){
       openAddrPicker("Chọn Tỉnh/Thành phố", list, (item)=>{
         state.p = item; state.d = null; state.w = null;
         setLabel(pBtn, item.name, true);
-        if(mode==="new"){
-          setLabel(wBtn, "Chọn", false); wBtn.disabled = false;
-        } else {
-          setLabel(dBtn, "Chọn", false); dBtn.disabled = false;
-          setLabel(wBtn, "Chọn", false); wBtn.disabled = true;
-        }
+        setLabel(dBtn, "Chọn", false); dBtn.disabled = false;
+        setLabel(wBtn, "Chọn", false); wBtn.disabled = true;
         syncFinal(); fire();
       });
     }catch(e){ loadingBtn(pBtn, false); toast("Lỗi tải danh sách tỉnh"); }
@@ -1873,22 +1851,18 @@ function bindAddressPicker(prefill, onChange){
       openAddrPicker(`Chọn Quận/Huyện · ${state.p.name}`, list, (item)=>{
         state.d = item; state.w = null;
         setLabel(dBtn, item.name, true);
-        setLabel(wBtn, "Phường/Xã", false); wBtn.disabled = false;
+        setLabel(wBtn, "Chọn", false); wBtn.disabled = false;
         syncFinal(); fire();
       });
     }catch(e){ loadingBtn(dBtn, false); toast("Lỗi tải danh sách huyện"); }
   };
   wBtn.onclick = async ()=>{
-    // New mode (2 cấp): wards thuộc tỉnh. Old mode (3 cấp): wards thuộc huyện.
-    const isNew = (mode==="new");
-    if(isNew && !state.p) return;
-    if(!isNew && !state.d) return;
+    if(!state.d) return;
     loadingBtn(wBtn, true);
     try{
-      const list = isNew ? await fetchWardsByProvince(state.p.code) : await fetchWards(state.d.code);
+      const list = await fetchWards(state.d.code);
       loadingBtn(wBtn, false);
-      const subtitle = isNew ? state.p.name : state.d.name;
-      openAddrPicker(`Chọn Phường/Xã · ${subtitle}`, list, (item)=>{
+      openAddrPicker(`Chọn Phường/Xã · ${state.d.name}`, list, (item)=>{
         state.w = item;
         setLabel(wBtn, item.name, true);
         syncFinal(); fire();
@@ -1896,39 +1870,21 @@ function bindAddressPicker(prefill, onChange){
     }catch(e){ loadingBtn(wBtn, false); toast("Lỗi tải danh sách xã"); }
   };
   streetInp.addEventListener("input", syncFinal);
-  // Khởi tạo từ prefill có structured (province_code...) — fill nhanh không phải pick lại
-  if(prefill && prefill.province_code){
-    // Có district_code → là dữ liệu cũ 3-cấp → switch sang old mode
-    if(prefill.district_code){
-      mode = "old";
-      $$(".addr-mode-opt").forEach(x=>x.classList.toggle("active", x.dataset.mode==="old"));
-      dBtn.style.display = "";
-    }
+  // Khởi tạo từ prefill có structured (chỉ áp dụng nếu prefill đã dùng GHN IDs;
+  // dữ liệu cũ từ VN gov code sẽ không match → user phải chọn lại).
+  if(prefill && prefill.province_code && prefill.district_code){
     state.p = { code: prefill.province_code, name: prefill.province_name };
     setLabel(pBtn, prefill.province_name, true);
-    if(prefill.district_code){
-      state.d = { code: prefill.district_code, name: prefill.district_name };
-      setLabel(dBtn, prefill.district_name, true);
-      dBtn.disabled = false;
-    }
+    state.d = { code: prefill.district_code, name: prefill.district_name };
+    setLabel(dBtn, prefill.district_name, true);
+    dBtn.disabled = false;
     if(prefill.ward_code){
       state.w = { code: prefill.ward_code, name: prefill.ward_name };
       setLabel(wBtn, prefill.ward_name, true);
-      wBtn.disabled = false;
-    } else {
-      wBtn.disabled = false;
     }
+    wBtn.disabled = false;
   }
   if(streetInp.value.trim()) syncFinal();
-}
-async function fetchWardsByProvince(provinceCode){
-  // depth=3 trả về province → wards trực tiếp (cho API 2-level)
-  const res = await fetch(`${VN_ADDR_API}/p/${provinceCode}?depth=3`);
-  const data = await res.json();
-  // Hỗ trợ cả schema: data.wards (trực tiếp) hoặc data.districts[].wards (gộp lại)
-  if(Array.isArray(data.wards)) return data.wards;
-  if(Array.isArray(data.districts)) return data.districts.flatMap(d=>d.wards||[]);
-  return [];
 }
 
 /* Modal chi tiết đơn — vertical timeline + receipt style */
