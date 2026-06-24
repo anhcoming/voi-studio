@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>VOISTUDIO — Bulk Upload to Cloudinary + Generate SQL</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:24px auto;padding:0 18px;color:#1a1a1a}
+    h1{font-size:22px;margin-bottom:6px}
+    .sub{color:#777;font-size:14px;margin-bottom:24px}
+    .drop{
+      border:2px dashed #ccc;border-radius:12px;padding:40px;text-align:center;
+      background:#fafafa;cursor:pointer;transition:.15s;
+    }
+    .drop.over{border-color:#1d9e75;background:#e8f6f0}
+    .drop input{display:none}
+    .drop p{margin:6px 0;color:#555}
+    .files{margin:18px 0;max-height:300px;overflow-y:auto;border:1px solid #eee;border-radius:8px;background:#fff}
+    .files:empty{display:none}
+    .file{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #f0f0f0;font-size:13px}
+    .file:last-child{border-bottom:none}
+    .file .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Menlo,monospace}
+    .file .status{font-size:12px;padding:3px 9px;border-radius:99px;background:#eee;color:#666;flex-shrink:0;margin-left:10px}
+    .file .status.pending{background:#f0f0f0}
+    .file .status.uploading{background:#fff4d6;color:#a26a00}
+    .file .status.done{background:#e6f7ef;color:#1d7a5b}
+    .file .status.error{background:#fdecec;color:#a02525}
+    .actions{display:flex;gap:10px;margin:18px 0}
+    button{padding:10px 18px;border:none;border-radius:8px;background:#1a1a1a;color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+    button:hover{background:#000}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    button.ghost{background:#fff;color:#1a1a1a;border:1px solid #ddd}
+    .progress{height:6px;background:#eee;border-radius:99px;overflow:hidden;margin:10px 0}
+    .progress .bar{height:100%;background:linear-gradient(90deg,#1d9e75,#27c08e);transition:width .25s ease;width:0}
+    textarea{width:100%;min-height:280px;font-family:Menlo,monospace;font-size:12.5px;padding:14px;border:1px solid #ddd;border-radius:8px;resize:vertical;background:#fafafa}
+    .stat{display:inline-block;padding:5px 12px;background:#f0f0f0;border-radius:99px;font-size:13px;font-weight:600;color:#333;margin-right:8px}
+    .err{color:#a02525;font-size:13px;margin:8px 0}
+    .ok{color:#1d7a5b;font-size:13px;margin:8px 0}
+    label.fld{display:block;margin-bottom:14px}
+    label.fld span{display:block;font-size:13px;font-weight:600;margin-bottom:5px;color:#555}
+    label.fld input{width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px}
+    details{margin:14px 0}
+    summary{cursor:pointer;font-weight:600;color:#555;font-size:13px}
+  </style>
+</head>
+<body>
+  <h1>Bulk Upload to Cloudinary + Auto SQL</h1>
+  <p class="sub">Tool 1-lần: kéo thả ảnh → upload Cloudinary → query products từ Supabase → random assign → output SQL.</p>
+
+  <details>
+    <summary>⚙️ Cấu hình (tự đọc từ assets/config.js, sửa nếu cần)</summary>
+    <div style="margin-top:12px;padding:12px;background:#fafafa;border-radius:8px">
+      <label class="fld"><span>Cloudinary Cloud Name</span><input id="cfgCloud" placeholder="anhcoming"></label>
+      <label class="fld"><span>Cloudinary Upload Preset (unsigned)</span><input id="cfgPreset" placeholder="voistudio"></label>
+      <label class="fld"><span>Folder trên Cloudinary (optional, vd: voistudio/products)</span><input id="cfgFolder" placeholder="voistudio/products" value="voistudio/products"></label>
+      <label class="fld"><span>Supabase URL</span><input id="cfgSupaUrl" placeholder="https://xxx.supabase.co"></label>
+      <label class="fld"><span>Supabase Anon Key</span><input id="cfgSupaKey" placeholder="sb_publishable_xxx"></label>
+    </div>
+  </details>
+
+  <div class="drop" id="drop">
+    <p style="font-size:18px;font-weight:600;margin:0 0 4px">📁 Kéo thả folder ảnh vào đây</p>
+    <p>hoặc click để chọn nhiều file</p>
+    <input type="file" id="picker" multiple accept="image/*">
+  </div>
+
+  <div id="filesList" class="files"></div>
+
+  <div class="progress" id="progressBox" style="display:none">
+    <div class="bar" id="progressBar"></div>
+  </div>
+
+  <div class="actions">
+    <button id="btnUpload" disabled>1. Upload tất cả lên Cloudinary</button>
+    <button id="btnGenSql" class="ghost" disabled>2. Generate SQL (random map)</button>
+    <button id="btnClear" class="ghost">Reset</button>
+  </div>
+
+  <div id="status"></div>
+
+  <textarea id="sqlOut" placeholder="SQL sẽ hiện ở đây sau khi cả 2 bước xong..." readonly></textarea>
+  <p class="sub" style="margin-top:10px">Copy SQL trên → paste vào <b>Supabase Dashboard → SQL Editor → New query → Run</b>.</p>
+
+  <script>
+    // ===== State =====
+    let files = [];            // {file, name, status, secureUrl, publicId, error}
+    let products = [];         // {id, name} từ Supabase
+    const $ = sel => document.querySelector(sel);
+    const setStatus = (html, cls = "") => {
+      $("#status").innerHTML = html ? `<p class="${cls}">${html}</p>` : "";
+    };
+
+    // ===== Try preload config from ../assets/config.js =====
+    (function preloadConfig(){
+      const s = document.createElement("script");
+      s.src = "../assets/config.js";
+      s.onload = ()=>{
+        const cfg = window.CONFIG || {};
+        if(cfg.CLOUDINARY_CLOUD_NAME) $("#cfgCloud").value = cfg.CLOUDINARY_CLOUD_NAME;
+        if(cfg.CLOUDINARY_UPLOAD_PRESET) $("#cfgPreset").value = cfg.CLOUDINARY_UPLOAD_PRESET;
+        if(cfg.SUPABASE_URL) $("#cfgSupaUrl").value = cfg.SUPABASE_URL;
+        if(cfg.SUPABASE_ANON_KEY) $("#cfgSupaKey").value = cfg.SUPABASE_ANON_KEY;
+      };
+      s.onerror = ()=> setStatus("⚠️ Không load được ../assets/config.js — điền thủ công 4 trường trên.", "err");
+      document.head.appendChild(s);
+    })();
+
+    // ===== Drop zone =====
+    const drop = $("#drop");
+    drop.addEventListener("click", ()=> $("#picker").click());
+    drop.addEventListener("dragover", e=>{ e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", ()=> drop.classList.remove("over"));
+    drop.addEventListener("drop", e=>{
+      e.preventDefault(); drop.classList.remove("over");
+      const items = e.dataTransfer.files;
+      handleFiles(items);
+    });
+    $("#picker").addEventListener("change", e=> handleFiles(e.target.files));
+
+    function handleFiles(fileList){
+      const arr = Array.from(fileList).filter(f=> f.type.startsWith("image/"));
+      arr.forEach(f => files.push({ file: f, name: f.name, status: "pending" }));
+      renderFiles();
+    }
+
+    function renderFiles(){
+      const list = $("#filesList");
+      list.innerHTML = files.map((f, i)=>
+        `<div class="file">
+          <span class="name">${escapeHtml(f.name)} <span style="color:#999;font-size:11px">(${(f.file.size/1024).toFixed(0)} KB)</span></span>
+          <span class="status ${f.status}">${statusText(f.status)}</span>
+        </div>`
+      ).join("");
+      $("#btnUpload").disabled = files.length === 0 || files.every(f=> f.status === "done");
+      $("#btnGenSql").disabled = !files.some(f=> f.status === "done");
+    }
+
+    function statusText(s){
+      return { pending:"⏳ chờ", uploading:"⬆️ đang up", done:"✓ done", error:"✕ lỗi" }[s] || s;
+    }
+
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // ===== Upload to Cloudinary =====
+    $("#btnUpload").addEventListener("click", async ()=>{
+      const cloud = $("#cfgCloud").value.trim();
+      const preset = $("#cfgPreset").value.trim();
+      const folder = $("#cfgFolder").value.trim();
+      if(!cloud || !preset){
+        setStatus("Thiếu Cloud Name hoặc Upload Preset.", "err"); return;
+      }
+      setStatus("Bắt đầu upload...");
+      $("#btnUpload").disabled = true;
+      $("#progressBox").style.display = "";
+      const endpoint = `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloud)}/image/upload`;
+      let done = 0;
+      const pending = files.filter(f=> f.status === "pending" || f.status === "error");
+      for(const item of pending){
+        item.status = "uploading";
+        renderFiles();
+        try{
+          const fd = new FormData();
+          fd.append("file", item.file);
+          fd.append("upload_preset", preset);
+          if(folder) fd.append("folder", folder);
+          // public_id: lấy từ tên file (bỏ extension), Cloudinary tự sanitize
+          const baseName = item.file.name.replace(/\.[^.]+$/, "");
+          fd.append("public_id", baseName);
+          const r = await fetch(endpoint, { method:"POST", body: fd });
+          if(!r.ok){
+            const errText = await r.text();
+            throw new Error(`HTTP ${r.status}: ${errText.slice(0, 120)}`);
+          }
+          const data = await r.json();
+          item.secureUrl = data.secure_url;
+          item.publicId  = data.public_id;
+          item.status = "done";
+        }catch(e){
+          item.status = "error";
+          item.error = e.message;
+          console.error("Upload fail:", item.name, e);
+        }
+        done++;
+        $("#progressBar").style.width = `${(done / pending.length) * 100}%`;
+        renderFiles();
+      }
+      const okCount = files.filter(f=> f.status === "done").length;
+      const errCount = files.filter(f=> f.status === "error").length;
+      setStatus(`Upload xong: ${okCount} thành công, ${errCount} lỗi`, errCount ? "err" : "ok");
+      $("#btnUpload").disabled = false;
+      $("#btnGenSql").disabled = okCount === 0;
+    });
+
+    // ===== Fetch products from Supabase + generate SQL =====
+    $("#btnGenSql").addEventListener("click", async ()=>{
+      const supaUrl = $("#cfgSupaUrl").value.trim().replace(/\/+$/, "");
+      const supaKey = $("#cfgSupaKey").value.trim();
+      if(!supaUrl || !supaKey){
+        setStatus("Thiếu Supabase URL hoặc Anon Key.", "err"); return;
+      }
+      setStatus("Đang query products từ Supabase...");
+      try{
+        const r = await fetch(`${supaUrl}/rest/v1/products?select=id,name&order=sort.asc&active=eq.true`, {
+          headers: {
+            "apikey": supaKey,
+            "authorization": `Bearer ${supaKey}`,
+          },
+        });
+        if(!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        products = await r.json();
+      }catch(e){
+        setStatus(`Lỗi query products: ${e.message}`, "err"); return;
+      }
+      if(!products.length){
+        setStatus("DB không có product nào (hoặc RLS chặn).", "err"); return;
+      }
+      // Random map: shuffle uploaded URLs, cycle qua nếu products > urls
+      const urls = files.filter(f=> f.status === "done").map(f=> f.secureUrl);
+      if(!urls.length){ setStatus("Không có URL nào để map.", "err"); return; }
+      const shuffled = shuffle([...urls]);
+      const sqlLines = [
+        "-- =========================================================",
+        "-- Auto-generated by tools/bulk-upload.html",
+        `-- ${products.length} products × ${urls.length} ảnh (random map, có cycle nếu thiếu)`,
+        `-- Cloudinary: ${$("#cfgCloud").value}/${$("#cfgFolder").value || "(root)"}`,
+        "-- =========================================================",
+        ""
+      ];
+      products.forEach((p, i)=>{
+        const url = shuffled[i % shuffled.length];
+        // Transformations tối ưu:
+        //   f_auto    — WebP/AVIF tự chọn theo browser (-30-60% size vs JPG)
+        //   q_auto    — auto quality, tự nén theo content
+        //   w_600,h_750,c_fill — resize 600×750 fit aspect 4/5 cards
+        //   dpr_auto  — retina display tự nhân lên 2x
+        // → ảnh từ ~1-2MB giảm xuống ~30-80KB, load 10-30× nhanh hơn.
+        const optimizedUrl = url.replace("/upload/", "/upload/f_auto,q_auto,w_600,h_750,c_fill,dpr_auto/");
+        sqlLines.push(`update public.products set image_url = '${optimizedUrl}' where id = '${p.id}'; -- ${escapeSql(p.name)}`);
+      });
+      sqlLines.push("");
+      sqlLines.push("-- Verify:");
+      sqlLines.push("select count(*) as updated from public.products where image_url like 'https://res.cloudinary.com/%';");
+      $("#sqlOut").value = sqlLines.join("\n");
+      setStatus(`Generated SQL cho ${products.length} products. Copy → paste vào Supabase SQL Editor.`, "ok");
+    });
+
+    function shuffle(arr){
+      for(let i = arr.length - 1; i > 0; i--){
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+    function escapeSql(s){
+      return String(s).replace(/'/g, "''");
+    }
+
+    // ===== Reset =====
+    $("#btnClear").addEventListener("click", ()=>{
+      files = []; products = [];
+      $("#filesList").innerHTML = "";
+      $("#sqlOut").value = "";
+      $("#progressBox").style.display = "none";
+      $("#progressBar").style.width = "0";
+      setStatus("");
+      $("#btnUpload").disabled = true;
+      $("#btnGenSql").disabled = true;
+    });
+  </script>
+</body>
+</html>
