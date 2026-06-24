@@ -807,8 +807,8 @@ function featureBlock(b){
 function renderHome(){
   const root = $("#page");
   if(window.SEO) SEO.set({
-    title: S.BRAND.tagline || "Be Bold · Be New · Be Original",
-    description: `${S.BRAND.name} — local brand streetwear. ${S.BRAND.tagline||""}`,
+    title: S.BRAND.tagline || S.BRAND.name,
+    description: `${S.BRAND.name} — local brand streetwear cho người trẻ. Áo thun, ba lỗ, hoodie, polo, túi tote.`,
   });
   // Blocks từ Home settings — admin custom, fallback defaults. Products derived
   // tự động theo catKey/collection của từng block.
@@ -829,9 +829,11 @@ function renderHome(){
   const heroStyle = HG.heroImage ? `style="background:linear-gradient(rgba(0,0,0,.35),rgba(0,0,0,.35)),url('${escapeXML(HG.heroImage)}') center/cover no-repeat"` : "";
   const tickerBottomItems = (HG.tickerBottom && HG.tickerBottom.length ? HG.tickerBottom : Home.defaults.tickerBottom)
     .map(t=>`<span>${escapeXML(t)}</span>`).join("");
+  // Hero H1 chỉ render nếu admin set heroHeadline. Default rỗng → skip H1.
+  const headline = HG.heroHeadline || "";
   const hero = `<section class="hero" ${heroStyle}>
     <div class="hero-inner">
-      <h1>${HG.heroHeadline || Home.defaults.heroHeadline}</h1>
+      ${headline ? `<h1>${headline}</h1>` : ""}
       <p>${escapeXML(heroSub)}</p>
       <a class="btn btn-light" href="${escapeXML(HG.heroCtaHref || "collection.html")}">${escapeXML(HG.heroCta || "Khám phá bộ sưu tập")}</a>
     </div>
@@ -2337,7 +2339,7 @@ const Home = {
       "💬 Hỗ trợ tư vấn 24/7",
     ],
     tickerBottom: ["★ FREESHIP 500K","★ SALE 50%","★ NEW ARRIVALS"],
-    heroHeadline: "Be Bold.<br>Be New.<br>Be <em>Original.</em>",
+    heroHeadline: "",
     heroSub: "",
     heroCta: "Khám phá bộ sưu tập",
     heroCtaHref: "collection.html",

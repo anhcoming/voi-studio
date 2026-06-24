@@ -437,7 +437,7 @@ const HOME_DEFAULTS = {
     "💬 Hỗ trợ tư vấn 24/7",
   ],
   tickerBottom: ["★ FREESHIP 500K","★ SALE 50%","★ NEW ARRIVALS"],
-  heroHeadline: "Be Bold.<br>Be New.<br>Be <em>Original.</em>",
+  heroHeadline: "",
   heroSub: "",
   heroCta: "Khám phá bộ sưu tập",
   heroCtaHref: "collection.html",

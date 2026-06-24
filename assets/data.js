@@ -5,7 +5,7 @@
 
 const BRAND = {
   name: "VOISTUDIO",          // tên thương hiệu (đổi tại đây)
-  tagline: "Be Bold · Be New · Be Original",
+  tagline: "",                // tagline rỗng — không hiển thị ở hero/footer/SEO
   hotline: "0900 000 000",
   email: "hello@voistudio.vn",
   hours: "Thứ 2 – Thứ 7 · 08:00 – 17:30",
